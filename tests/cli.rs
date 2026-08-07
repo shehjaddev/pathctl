@@ -580,7 +580,7 @@ fn real_path_gated() {
         eprintln!("skipped: PATHCTL_TEST_REAL not set");
         return;
     }
-    fn real(name: &str, snap: &Path) -> Command {
+    fn real(snap: &Path) -> Command {
         let mut cmd = Command::cargo_bin("pathctl").unwrap();
         cmd.env("PATHCTL_SNAPSHOT_DIR", snap)
             .arg("--no-broadcast")
@@ -589,30 +589,30 @@ fn real_path_gated() {
     }
     let name = "PATHCTL_REAL_SMOKE";
     let snap = tempfile::tempdir().unwrap();
-    let before = real(name, snap.path())
+    let before = real(snap.path())
         .arg("env")
         .arg("get")
         .arg(name)
         .output()
         .unwrap();
     let before_value = stdout(&before);
-    real(name, snap.path())
+    real(snap.path())
         .arg("env")
         .arg("set")
         .arg(name)
         .arg("smoke-1")
         .assert()
         .success();
-    real(name, snap.path())
+    real(snap.path())
         .arg("env")
         .arg("get")
         .arg(name)
         .assert()
         .success()
         .stdout("smoke-1\n");
-    real(name, snap.path()).arg("undo").assert().success();
+    real(snap.path()).arg("undo").assert().success();
     if before_value.is_empty() {
-        real(name, snap.path())
+        real(snap.path())
             .arg("env")
             .arg("get")
             .arg(name)
