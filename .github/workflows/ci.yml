@@ -25,3 +25,14 @@ jobs:
             throw "longPathAware not found in embedded manifest"
           }
           Write-Host "manifest embedded OK"
+
+  system-scope:
+    runs-on: windows-latest
+    env:
+      PATHCTL_TEST_REAL_SYSTEM: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # GitHub Windows runners run as admin, so this exercises real HKLM
+      # environment writes (set -> read -> undo) on a uniquely named variable.
+      - run: cargo test --test cli system_scope_gated -- --ignored

@@ -633,6 +633,58 @@ fn import_rejects_bad_json() {
         .code(2);
 }
 
+#[test]
+#[ignore = "requires PATHCTL_TEST_REAL_SYSTEM=1 and an elevated shell (writes HKLM environment)"]
+fn system_scope_gated() {
+    if std::env::var_os("PATHCTL_TEST_REAL_SYSTEM").is_none() {
+        eprintln!("skipped: PATHCTL_TEST_REAL_SYSTEM not set");
+        return;
+    }
+    fn sys(snap: &Path) -> Command {
+        let mut cmd = Command::cargo_bin("pathctl").unwrap();
+        cmd.env("PATHCTL_SNAPSHOT_DIR", snap)
+            .arg("--no-broadcast")
+            .arg("-y")
+            .arg("--scope")
+            .arg("system");
+        cmd
+    }
+    let name = "PATHCTL_SYSTEM_SMOKE";
+    let snap = tempfile::tempdir().unwrap();
+    // best-effort cleanup of a stale variable from a previous failed run
+    let _ = sys(snap.path()).arg("env").arg("delete").arg(name).output();
+    let before = sys(snap.path())
+        .arg("env")
+        .arg("get")
+        .arg(name)
+        .output()
+        .unwrap();
+    let before_value = stdout(&before);
+    sys(snap.path())
+        .arg("env")
+        .arg("set")
+        .arg(name)
+        .arg("smoke-1")
+        .assert()
+        .success();
+    sys(snap.path())
+        .arg("env")
+        .arg("get")
+        .arg(name)
+        .assert()
+        .success()
+        .stdout("smoke-1\n");
+    sys(snap.path()).arg("undo").assert().success();
+    if before_value.is_empty() {
+        sys(snap.path())
+            .arg("env")
+            .arg("get")
+            .arg(name)
+            .assert()
+            .code(4);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Real-path smoke test (opt-in; never runs in CI)
 // ---------------------------------------------------------------------------
