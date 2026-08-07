@@ -72,6 +72,8 @@ enum Cmd {
     Remove { target: String },
     /// Drop duplicate entries, keeping the first
     Dedupe,
+    /// Remove entries whose directories no longer exist
+    Prune,
     /// Move an entry to a new position (1-based indices)
     Move { from: usize, to: usize },
     /// Undo a previous mutation; --list shows snapshot history
@@ -154,6 +156,10 @@ fn run(cli: Cli, g: Global, reg: &Registry) -> Result<u8> {
         Cmd::Dedupe => {
             let scopes = scope(false)?;
             commands::dedupe(reg, &g, scopes[0])
+        }
+        Cmd::Prune => {
+            let scopes = scope(false)?;
+            commands::prune(reg, &g, scopes[0])
         }
         Cmd::Move { from, to } => {
             let scopes = scope(false)?;

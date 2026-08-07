@@ -254,6 +254,51 @@ fn move_reorders_entries() {
         .code(2);
 }
 
+#[test]
+fn prune_removes_missing_keeps_existing() {
+    let dir = setup("prune");
+    let missing = r"C:\pathctl-prune-missing";
+    let existing = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    pathctl("prune", dir.path()).arg("add").arg(missing).assert().success();
+    pathctl("prune", dir.path()).arg("add").arg(&existing).assert().success();
+    pathctl("prune", dir.path())
+        .arg("prune")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pruned: 1 missing"));
+    let out = pathctl("prune", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .output()
+        .unwrap();
+    let text = stdout(&out);
+    assert!(text.contains(&existing), "existing dir must be kept");
+    assert!(!text.contains(missing), "missing dir must be pruned");
+    pathctl("prune", dir.path()).arg("prune").assert().code(4);
+}
+
+#[test]
+fn prune_dry_run_writes_nothing() {
+    let dir = setup("prune_dry");
+    let missing = r"C:\pathctl-prune-dry-missing";
+    pathctl("prune_dry", dir.path()).arg("add").arg(missing).assert().success();
+    pathctl("prune_dry", dir.path())
+        .arg("prune")
+        .arg("--dry-run")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains('-'));
+    pathctl("prune_dry", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(missing));
+}
+
 // ---------------------------------------------------------------------------
 // undo / diff
 // ---------------------------------------------------------------------------

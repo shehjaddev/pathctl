@@ -520,6 +520,62 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
     Ok(0)
 }
 
+/// Remove PATH entries whose directories no longer exist (roadmap v2, spec
+/// §10). `%VAR%` references that cannot be resolved are kept — existence
+/// cannot be determined for them.
+pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
+    let (before_raw, before_ty) = current_path(reg, scope)?;
+    let before = pathops::parse(&before_raw);
+    let mut kept: Vec<String> = Vec::with_capacity(before.len());
+    let mut removed: Vec<String> = Vec::new();
+    for e in &before {
+        let expanded = util::expand(e);
+        let resolvable = !util::has_var_ref(e) || expanded != *e;
+        if resolvable && !util::dir_exists(&expanded) {
+            removed.push(e.clone());
+        } else {
+            kept.push(e.clone());
+        }
+    }
+    if removed.is_empty() {
+        return Err(AppError::NoOp("PATH has no missing entries".into()));
+    }
+    let after_raw = kept.join(";");
+
+    if g.dry_run {
+        print_changes(g.json, &before, &kept);
+        return Ok(0);
+    }
+    confirm(
+        g,
+        &format!(
+            "prune {} missing entr{}",
+            removed.len(),
+            if removed.len() == 1 { "y" } else { "ies" }
+        ),
+    )?;
+    commit_path(
+        reg,
+        g,
+        scope,
+        &before_raw,
+        before_ty,
+        &after_raw,
+        &format!("prune {}", removed.len()),
+    )?;
+    if !g.json {
+        for e in &removed {
+            println!("- {e}");
+        }
+        println!(
+            "pruned: {} missing entr{}",
+            removed.len(),
+            if removed.len() == 1 { "y" } else { "ies" }
+        );
+    }
+    Ok(0)
+}
+
 pub fn move_entry(
     reg: &Registry,
     g: &Global,
