@@ -10,8 +10,10 @@
 //! design). Never goes through `setx` (1024-char crop, documented data loss).
 
 use std::io;
-use winreg::enums::{KEY_READ, KEY_WRITE, REG_EXPAND_SZ, REG_SZ, RegType};
+use winreg::enums::{KEY_READ, KEY_WRITE, REG_EXPAND_SZ, REG_SZ};
 use winreg::{RegKey, RegValue, HKLM, HKCU};
+
+pub use winreg::enums::RegType;
 
 pub const USER_KEY_PATH: &str = "Environment";
 pub const SYSTEM_KEY_PATH: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
@@ -48,20 +50,30 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// Prod instance; test mode when `PATHCTL_TEST_REG` is set (CLI tests).
+    /// Prod instance. `PATHCTL_TEST_REG` redirects writes to a scratch key
+    /// under `HKCU\Software\pathctl-test…` (CLI tests).
     pub fn new() -> Self {
-        Self {
-            test: std::env::var_os("PATHCTL_TEST_REG").is_some(),
-        }
+        Self { test: false }
     }
 
-    /// Explicit test instance (integration tests; no env race).
+    /// Explicit test instance (unit tests; no env race). CLI tests instead
+    /// spawn the binary with `PATHCTL_TEST_REG`.
+    #[cfg(test)]
     pub fn test() -> Self {
         Self { test: true }
     }
 
     fn key_path(&self, scope: Scope) -> String {
-        if self.test {
+        if let Some(v) = std::env::var_os("PATHCTL_TEST_REG") {
+            // CLI tests: `PATHCTL_TEST_REG=1` → default key; any other value
+            // → `Software\pathctl-test-<value>`, giving each test an isolated key.
+            let suffix = if v == "1" {
+                String::new()
+            } else {
+                format!("-{}", v.to_string_lossy())
+            };
+            format!(r"{TEST_KEY_PREFIX}{suffix}\{}", scope.label())
+        } else if self.test {
             format!(r"{TEST_KEY_PREFIX}\{}", scope.label())
         } else {
             match scope {
@@ -71,27 +83,41 @@ impl Registry {
         }
     }
 
-    fn hive(scope: Scope) -> &'static RegKey {
-        match scope {
-            Scope::User => HKCU,
-            Scope::System => HKLM,
+    fn hive(&self, scope: Scope) -> &'static RegKey {
+        if self.test || std::env::var_os("PATHCTL_TEST_REG").is_some() {
+            // Test mode redirects every scope under HKCU, so the hive must
+            // follow (system scope would otherwise hit real HKLM keys).
+            HKCU
+        } else {
+            match scope {
+                Scope::User => HKCU,
+                Scope::System => HKLM,
+            }
         }
     }
 
+    fn open_read(&self, scope: Scope) -> io::Result<RegKey> {
+        self.open_with(scope, KEY_READ)
+    }
+
     fn open(&self, scope: Scope) -> io::Result<RegKey> {
-        let hive = Self::hive(scope);
-        match hive.open_subkey_with_flags(&self.key_path(scope), KEY_READ | KEY_WRITE) {
+        self.open_with(scope, KEY_READ | KEY_WRITE)
+    }
+
+    fn open_with(&self, scope: Scope, access: u32) -> io::Result<RegKey> {
+        let hive = self.hive(scope);
+        match hive.open_subkey_with_flags(self.key_path(scope), access) {
             Ok(k) => Ok(k),
             // Missing key on a fresh profile: create it.
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                hive.create_subkey(&self.key_path(scope)).map(|(k, _)| k)
+                hive.create_subkey(self.key_path(scope)).map(|(k, _)| k)
             }
             Err(e) => Err(e),
         }
     }
 
     fn read_value(&self, scope: Scope, name: &str) -> io::Result<Option<PathValue>> {
-        match self.open(scope)?.get_raw_value(name) {
+        match self.open_read(scope)?.get_raw_value(name) {
             Ok(v) => Ok(Some(PathValue {
                 raw: decode(&v.bytes),
                 ty: v.vtype,
@@ -138,7 +164,7 @@ impl Registry {
     /// All values under a scope key (export).
     pub fn enum_all(&self, scope: Scope) -> io::Result<Vec<(String, PathValue)>> {
         let mut out = Vec::new();
-        for item in self.open(scope)?.enum_values() {
+        for item in self.open_read(scope)?.enum_values() {
             let (name, v) = item?;
             out.push((
                 name,
@@ -160,6 +186,33 @@ pub fn default_path_type() -> RegType {
 /// Default type for a *new* general env var: plain string.
 pub fn default_var_type() -> RegType {
     REG_SZ
+}
+
+/// Stable u32 form for JSON (snapshots, exports).
+pub fn reg_type_to_u32(t: RegType) -> u32 {
+    t as isize as u32
+}
+
+/// Reconstruct a `RegType` from its u32 form; unknown values fall back to
+/// `REG_SZ` (defensive: future Windows value types we don't know). The
+/// numeric values are the stable Win32 registry value-type constants.
+pub fn reg_type_from_u32(v: u32) -> RegType {
+    use winreg::enums::RegType;
+    match v as isize {
+        0 => RegType::REG_NONE,
+        1 => RegType::REG_SZ,
+        2 => RegType::REG_EXPAND_SZ,
+        3 => RegType::REG_BINARY,
+        4 => RegType::REG_DWORD,
+        5 => RegType::REG_DWORD_BIG_ENDIAN,
+        6 => RegType::REG_LINK,
+        7 => RegType::REG_MULTI_SZ,
+        8 => RegType::REG_RESOURCE_LIST,
+        9 => RegType::REG_FULL_RESOURCE_DESCRIPTOR,
+        10 => RegType::REG_RESOURCE_REQUIREMENTS_LIST,
+        11 => RegType::REG_QWORD,
+        _ => RegType::REG_SZ,
+    }
 }
 
 /// REG_* values are NUL-terminated UTF-16LE.

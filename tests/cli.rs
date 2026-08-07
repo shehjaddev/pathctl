@@ -1,0 +1,602 @@
+//! CLI integration tests: exercise the real binary end to end against an
+//! isolated registry test key (`Software\pathctl-test-<name>`) and a temp
+//! snapshot dir. The real HKCU\Environment key is never touched (spec §8).
+//! A real-path smoke test is gated behind PATHCTL_TEST_REAL=1 (see
+//! `real_path_gated`).
+
+use assert_cmd::Command;
+use predicates::prelude::*;
+use std::path::Path;
+use std::process::Output;
+
+/// Run the binary against an isolated test key + snapshot dir, with
+/// confirmation skipped and broadcasts disabled.
+fn pathctl(name: &str, snap_dir: &Path) -> Command {
+    let mut cmd = Command::cargo_bin("pathctl").unwrap();
+    cmd.env("PATHCTL_TEST_REG", name)
+        .env("PATHCTL_SNAPSHOT_DIR", snap_dir)
+        .arg("--no-broadcast")
+        .arg("-y");
+    cmd
+}
+
+fn stdout(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn cleanup(name: &str) {
+    let _ = winreg::HKCU.delete_subkey_all(format!(r"Software\pathctl-test-{name}"));
+}
+
+fn setup(name: &str) -> tempfile::TempDir {
+    cleanup(name);
+    tempfile::tempdir().unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// list / check
+// ---------------------------------------------------------------------------
+
+#[test]
+fn empty_key_lists_nothing() {
+    let dir = setup("empty_list");
+    pathctl("empty_list", dir.path())
+        .arg("list")
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn check_is_clean_on_empty_key() {
+    let dir = setup("check_clean");
+    pathctl("check_clean", dir.path())
+        .arg("check")
+        .assert()
+        .success()
+        .code(0)
+        .stdout(predicate::str::contains("OK"));
+}
+
+#[test]
+fn check_flags_missing_directory_exit_1() {
+    let dir = setup("check_missing");
+    let missing = r"C:\pathctl-definitely-missing-xyz";
+    pathctl("check_missing", dir.path())
+        .arg("add")
+        .arg(missing)
+        .assert()
+        .success();
+    pathctl("check_missing", dir.path())
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("missing directory"));
+}
+
+// ---------------------------------------------------------------------------
+// add / remove / dedupe / move
+// ---------------------------------------------------------------------------
+
+#[test]
+fn add_then_list_shows_entry() {
+    let dir = setup("add_list");
+    let entry = r"C:\pathctl-test-bin";
+    pathctl("add_list", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("added"));
+    pathctl("add_list", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(entry));
+}
+
+#[test]
+fn add_prepend_puts_entry_first() {
+    let dir = setup("add_prepend");
+    let a = r"C:\pathctl-p-a";
+    let b = r"C:\pathctl-p-b";
+    pathctl("add_prepend", dir.path()).arg("add").arg(a).assert().success();
+    pathctl("add_prepend", dir.path())
+        .arg("add")
+        .arg(b)
+        .arg("--prepend")
+        .assert()
+        .success();
+    let out = pathctl("add_prepend", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .output()
+        .unwrap();
+    let text = stdout(&out);
+    let pos_b = text.find(b).expect("b present");
+    let pos_a = text.find(a).expect("a present");
+    assert!(pos_b < pos_a, "prepend entry must come first");
+}
+
+#[test]
+fn add_dedupe_noop_exits_4() {
+    let dir = setup("add_dedupe_noop");
+    let entry = r"C:\pathctl-dd";
+    pathctl("add_dedupe_noop", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
+    pathctl("add_dedupe_noop", dir.path())
+        .arg("add")
+        .arg(entry)
+        .arg("--dedupe")
+        .assert()
+        .code(4);
+}
+
+#[test]
+fn add_duplicate_without_dedupe_is_allowed() {
+    let dir = setup("add_dup_allowed");
+    let entry = r"C:\pathctl-dup";
+    pathctl("add_dup_allowed", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("add_dup_allowed", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("add_dup_allowed", dir.path())
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("duplicate"));
+}
+
+#[test]
+fn dry_run_writes_nothing() {
+    let dir = setup("dry_run");
+    let entry = r"C:\pathctl-dry";
+    pathctl("dry_run", dir.path())
+        .arg("add")
+        .arg(entry)
+        .arg("--dry-run")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains('+'));
+    pathctl("dry_run", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(entry).not());
+}
+
+#[test]
+fn remove_by_path_and_by_index() {
+    let dir = setup("remove");
+    let a = r"C:\pathctl-rm-a";
+    let b = r"C:\pathctl-rm-b";
+    pathctl("remove", dir.path()).arg("add").arg(a).assert().success();
+    pathctl("remove", dir.path()).arg("add").arg(b).assert().success();
+    // by path
+    pathctl("remove", dir.path())
+        .arg("remove")
+        .arg(a)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed"));
+    // by #index
+    pathctl("remove", dir.path())
+        .arg("remove")
+        .arg("#1")
+        .assert()
+        .success();
+    pathctl("remove", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn remove_missing_exits_4() {
+    let dir = setup("remove_missing");
+    pathctl("remove_missing", dir.path())
+        .arg("remove")
+        .arg(r"C:\pathctl-not-there")
+        .assert()
+        .code(4);
+}
+
+#[test]
+fn dedupe_keeps_first_and_second_run_noops() {
+    let dir = setup("dedupe");
+    let entry = r"C:\pathctl-dedupe";
+    pathctl("dedupe", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("dedupe", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("dedupe", dir.path())
+        .arg("dedupe")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 duplicate"));
+    pathctl("dedupe", dir.path()).arg("dedupe").assert().code(4);
+    let out = pathctl("dedupe", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .output()
+        .unwrap();
+    assert_eq!(stdout(&out).matches(entry).count(), 1, "entry appears once");
+}
+
+#[test]
+fn move_reorders_entries() {
+    let dir = setup("move");
+    let a = r"C:\pathctl-mv-a";
+    let b = r"C:\pathctl-mv-b";
+    pathctl("move", dir.path()).arg("add").arg(a).assert().success();
+    pathctl("move", dir.path()).arg("add").arg(b).assert().success();
+    pathctl("move", dir.path())
+        .arg("move")
+        .arg("2")
+        .arg("1")
+        .assert()
+        .success();
+    let out = pathctl("move", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .output()
+        .unwrap();
+    let text = stdout(&out);
+    assert!(text.find(b).unwrap() < text.find(a).unwrap());
+    pathctl("move", dir.path())
+        .arg("move")
+        .arg("0")
+        .arg("1")
+        .assert()
+        .code(2);
+}
+
+// ---------------------------------------------------------------------------
+// undo / diff
+// ---------------------------------------------------------------------------
+
+#[test]
+fn undo_restores_and_is_itself_undoable() {
+    let dir = setup("undo");
+    let entry = r"C:\pathctl-undo";
+    pathctl("undo", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("undo", dir.path())
+        .arg("undo")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("restored"));
+    pathctl("undo", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(entry).not());
+    // undo of the undo brings it back
+    pathctl("undo", dir.path()).arg("undo").assert().success();
+    pathctl("undo", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(entry));
+}
+
+#[test]
+fn undo_to_specific_snapshot() {
+    let dir = setup("undo_to");
+    let a = r"C:\pathctl-uto-a";
+    let b = r"C:\pathctl-uto-b";
+    pathctl("undo_to", dir.path()).arg("add").arg(a).assert().success();
+    pathctl("undo_to", dir.path()).arg("add").arg(b).assert().success();
+    // snapshot 1 = "" -> a ; snapshot 2 = "a" -> "a;b"
+    pathctl("undo_to", dir.path())
+        .arg("undo")
+        .arg("--to")
+        .arg("1")
+        .assert()
+        .success();
+    pathctl("undo_to", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn undo_with_nothing_exits_4() {
+    let dir = setup("undo_empty");
+    pathctl("undo_empty", dir.path()).arg("undo").assert().code(4);
+}
+
+#[test]
+fn diff_tracks_external_drift_and_clears_after_undo() {
+    let dir = setup("diff");
+    let entry = r"C:\pathctl-diff";
+    pathctl("diff", dir.path()).arg("add").arg(entry).assert().success();
+    // recorded state matches current → clean
+    pathctl("diff", dir.path()).arg("diff").assert().code(0);
+    // simulate external drift by writing the test key behind the tool's back
+    let drift = r"C:\pathctl-external-drift";
+    write_path_direct("diff", &format!("{entry};{drift}"));
+    pathctl("diff", dir.path())
+        .arg("diff")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains('+'));
+    // undo restores the recorded before; diff clears
+    pathctl("diff", dir.path()).arg("undo").assert().success();
+    pathctl("diff", dir.path()).arg("diff").assert().code(0);
+}
+
+/// Write the Path value of a test key directly, bypassing the binary.
+fn write_path_direct(name: &str, value: &str) {
+    use winreg::enums::{KEY_READ, KEY_WRITE, REG_EXPAND_SZ};
+    use winreg::RegValue;
+    let key = winreg::HKCU
+        .open_subkey_with_flags(
+            format!(r"Software\pathctl-test-{name}\user"),
+            KEY_READ | KEY_WRITE,
+        )
+        .unwrap();
+    let mut wide: Vec<u16> = value.encode_utf16().collect();
+    wide.push(0);
+    let mut bytes = Vec::new();
+    for u in wide {
+        bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    key.set_raw_value("Path", &RegValue { bytes: bytes.into(), vtype: REG_EXPAND_SZ })
+        .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// env vars
+// ---------------------------------------------------------------------------
+
+#[test]
+fn env_set_get_delete_roundtrip() {
+    let dir = setup("env");
+    let name = "PATHCTL_TEST_VAR";
+    pathctl("env", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg(name)
+        .arg("hello world")
+        .assert()
+        .success();
+    pathctl("env", dir.path())
+        .arg("env")
+        .arg("get")
+        .arg(name)
+        .assert()
+        .success()
+        .stdout("hello world\n");
+    // idempotent set → no-op
+    pathctl("env", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg(name)
+        .arg("hello world")
+        .assert()
+        .code(4);
+    pathctl("env", dir.path())
+        .arg("env")
+        .arg("delete")
+        .arg(name)
+        .assert()
+        .success();
+    pathctl("env", dir.path())
+        .arg("env")
+        .arg("get")
+        .arg(name)
+        .assert()
+        .code(4);
+}
+
+#[test]
+fn env_set_is_undoable() {
+    let dir = setup("env_undo");
+    let name = "PATHCTL_TEST_VAR2";
+    pathctl("env_undo", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg(name)
+        .arg("v1")
+        .assert()
+        .success();
+    pathctl("env_undo", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg(name)
+        .arg("v2")
+        .assert()
+        .success();
+    pathctl("env_undo", dir.path())
+        .arg("undo")
+        .assert()
+        .success();
+    pathctl("env_undo", dir.path())
+        .arg("env")
+        .arg("get")
+        .arg(name)
+        .assert()
+        .success()
+        .stdout("v1\n");
+}
+
+#[test]
+fn guard_refuses_oversized_value_on_import() {
+    let dir = setup("guard");
+    let big = "x".repeat(33_000);
+    let json = format!(
+        r#"{{"path":{{}},"variables":{{"user":[{{"name":"PATHCTL_BIG_VAR","value":"{big}","ty":1}}]}}}}"#
+    );
+    let file = dir.path().join("big.json");
+    std::fs::write(&file, &json).unwrap();
+    // The 33,000-char value cannot be passed on argv (Windows 32,767-char
+    // command-line limit), so the guard is exercised through import instead.
+    pathctl("guard", dir.path())
+        .arg("import")
+        .arg(&file)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("limit"));
+    // nothing may have been written
+    pathctl("guard", dir.path())
+        .arg("env")
+        .arg("get")
+        .arg("PATHCTL_BIG_VAR")
+        .assert()
+        .code(4);
+}
+
+// ---------------------------------------------------------------------------
+// scope / exit codes / json
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mutating_all_scope_is_rejected() {
+    let dir = setup("scope_all");
+    pathctl("scope_all", dir.path())
+        .arg("add")
+        .arg(r"C:\x")
+        .arg("--scope")
+        .arg("all")
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn unknown_scope_is_rejected() {
+    let dir = setup("scope_bad");
+    pathctl("scope_bad", dir.path())
+        .arg("list")
+        .arg("--scope")
+        .arg("bogus")
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn json_output_parses() {
+    let dir = setup("json");
+    let entry = r"C:\pathctl-json";
+    pathctl("json", dir.path()).arg("add").arg(entry).assert().success();
+    let out = pathctl("json", dir.path())
+        .arg("list")
+        .arg("--json")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON");
+    let entries = v[0]["entries"].as_array().expect("entries array");
+    assert_eq!(entries[0]["entry"], entry);
+    assert_eq!(entries[0]["index"], 1);
+}
+
+#[test]
+fn usage_error_exits_2() {
+    let dir = setup("usage");
+    pathctl("usage", dir.path()).arg("bogus-command").assert().code(2);
+}
+
+// ---------------------------------------------------------------------------
+// export / import
+// ---------------------------------------------------------------------------
+
+#[test]
+fn export_import_roundtrip() {
+    let dir = setup("export");
+    let name = "PATHCTL_EXPORT_VAR";
+    let entry = r"C:\pathctl-export";
+    pathctl("export", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("export", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg(name)
+        .arg("exported-value")
+        .assert()
+        .success();
+    let export_file = dir.path().join("backup.json");
+    pathctl("export", dir.path())
+        .arg("export")
+        .arg("--output")
+        .arg(&export_file)
+        .assert()
+        .success();
+
+    // mutate state away
+    pathctl("export", dir.path()).arg("remove").arg(entry).assert().success();
+    pathctl("export", dir.path())
+        .arg("env")
+        .arg("delete")
+        .arg(name)
+        .assert()
+        .success();
+
+    // import restores (merge)
+    pathctl("export", dir.path())
+        .arg("import")
+        .arg(&export_file)
+        .assert()
+        .success();
+    pathctl("export", dir.path())
+        .arg("env")
+        .arg("get")
+        .arg(name)
+        .assert()
+        .success()
+        .stdout("exported-value\n");
+    pathctl("export", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(entry));
+}
+
+#[test]
+fn import_rejects_bad_json() {
+    let dir = setup("import_bad");
+    let bad = dir.path().join("bad.json");
+    std::fs::write(&bad, "not json").unwrap();
+    pathctl("import_bad", dir.path())
+        .arg("import")
+        .arg(&bad)
+        .assert()
+        .code(2);
+}
+
+// ---------------------------------------------------------------------------
+// Real-path smoke test (opt-in; never runs in CI)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires PATHCTL_TEST_REAL=1 and writes the real user PATH"]
+fn real_path_gated() {
+    if std::env::var_os("PATHCTL_TEST_REAL").is_none() {
+        eprintln!("skipped: PATHCTL_TEST_REAL not set");
+        return;
+    }
+    let name = "PATHCTL_REAL_SMOKE";
+    let snap = tempfile::tempdir().unwrap();
+    let mut cmd = Command::cargo_bin("pathctl").unwrap();
+    cmd.env("PATHCTL_SNAPSHOT_DIR", snap.path())
+        .arg("--no-broadcast")
+        .arg("-y");
+    let before = cmd
+        .arg("env")
+        .arg("get")
+        .arg(name)
+        .output()
+        .unwrap();
+    let before_value = stdout(&before);
+    cmd.arg("env").arg("set").arg(name).arg("smoke-1").assert().success();
+    cmd.arg("env").arg("get").arg(name).assert().success().stdout("smoke-1\n");
+    cmd.arg("undo").assert().success();
+    if before_value.is_empty() {
+        cmd.arg("env").arg("get").arg(name).assert().code(4);
+    }
+}

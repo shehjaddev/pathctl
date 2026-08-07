@@ -21,10 +21,26 @@ pub struct Snapshot {
     pub command: String,
     /// Unix nanos; the sort key and file name.
     pub ts: u128,
+    /// Registry value type of `before`, when known (lets undo of a delete
+    /// restore REG_EXPAND_SZ faithfully). Deviation from spec §4's JSON shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ty: Option<u32>,
 }
 
 impl Snapshot {
+    #[cfg(test)]
     pub fn new(scope: &str, name: &str, before: &str, after: &str, command: &str) -> Self {
+        Self::with_ty(scope, name, before, after, command, None)
+    }
+
+    pub fn with_ty(
+        scope: &str,
+        name: &str,
+        before: &str,
+        after: &str,
+        command: &str,
+        ty: Option<u32>,
+    ) -> Self {
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
@@ -36,6 +52,7 @@ impl Snapshot {
             after: after.to_string(),
             command: command.to_string(),
             ts,
+            ty,
         }
     }
 }
@@ -58,7 +75,7 @@ fn save_at(dir: &Path, s: &Snapshot) -> io::Result<PathBuf> {
     fs::create_dir_all(dir)?;
     let path = dir.join(format!("{}.json", s.ts));
     let tmp = dir.join(format!("{}.json.tmp", s.ts));
-    let data = serde_json::to_vec_pretty(s).map_err(|e| io::Error::other(e))?;
+    let data = serde_json::to_vec_pretty(s).map_err(io::Error::other)?;
     fs::write(&tmp, data)?;
     fs::OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
     fs::rename(&tmp, &path)?;
@@ -78,13 +95,12 @@ fn list_at(dir: &Path) -> io::Result<Vec<Snapshot>> {
         let entry = entry?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.ends_with(".json") {
-            if let Some(s) = fs::read_to_string(entry.path())
+        if name.ends_with(".json")
+            && let Some(s) = fs::read_to_string(entry.path())
                 .ok()
                 .and_then(|t| serde_json::from_str(&t).ok())
-            {
-                out.push(s);
-            }
+        {
+            out.push(s);
         }
     }
     out.sort_by_key(|s| s.ts);
