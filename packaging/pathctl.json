@@ -1,0 +1,13 @@
+{
+  "version": "0.1.0",
+  "description": "Safe PATH & environment-variable manager for Windows: list, dedupe, reorder, edit with undo/diff/JSON",
+  "homepage": "https://github.com/shehjaddev/pathctl",
+  "license": "MIT",
+  "bin": "pathctl.exe",
+  "url": "https://github.com/shehjaddev/pathctl/releases/download/v0.1.0/pathctl.exe",
+  "hash": "2eb94ead35fcf72cc19558c7062a7346b6fe0280b1561e479fc257473f8bb0b0",
+  "checkver": "github",
+  "autoupdate": {
+    "url": "https://github.com/shehjaddev/pathctl/releases/download/v$version/pathctl.exe"
+  }
+}

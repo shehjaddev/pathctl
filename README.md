@@ -18,8 +18,15 @@ pathctl undo                       # changed your mind? restored
 
 ## Install
 
-- Download the release binary from [Releases](https://github.com/shehjaddev/pathctl/releases) (single static exe, no dependencies).
+- **Scoop** (once submitted to ScoopInstaller/Extras): `scoop install pathctl`
+- **Winget** (once submitted to microsoft/winget-pkgs): `winget install shehjaddev.pathctl`
+- Download the release binary from [Releases](https://github.com/shehjaddev/pathctl/releases) (single static exe, no dependencies; `sha256.txt` in the release lists its checksum).
 - Or build from source: `cargo build --release` (Rust 1.88+, Windows).
+
+> Packaging status: release automation is live (tag `v*` → release with binary
+> + checksum). Winget/scoop submission runs from the `publish` workflow
+> (`Actions → publish → Run workflow`) once the `WINGET_PAT` / `SCOOP_PAT`
+> secrets are configured.
 
 ## Commands
 
@@ -30,11 +37,13 @@ pathctl undo                       # changed your mind? restored
 | `pathctl add <dir>` | append (or `--prepend`) a directory; `--dedupe` = no-op if present | `pathctl add C:\tools --prepend` |
 | `pathctl remove <dir\|#index>` | remove by path or 1-based list index | `pathctl remove 3` |
 | `pathctl dedupe` | drop duplicates, keep first | `pathctl dedupe` |
+| `pathctl prune` | remove entries whose directories no longer exist (dry-run to preview) | `pathctl prune --dry-run` |
 | `pathctl move <from> <to>` | reorder (1-based) | `pathctl move 5 1` |
 | `pathctl undo` | restore last snapshot (`--list` to browse, `--to <id>` specific) | `pathctl undo --to 2` |
 | `pathctl diff` | current PATH vs last recorded state (exit 1 if drifted) | `pathctl diff --json` |
 | `pathctl export` / `pathctl import` | JSON backup/restore (merge; never truncates) | `pathctl export --output path.json` |
 | `pathctl env get/set/delete` | any environment variable, same snapshot/undo safety | `pathctl env set MY_FLAG 1` |
+| `pathctl completions <shell>` | completion script for bash, elvish, fish, powershell or zsh | `pathctl completions powershell \| Out-String \| Invoke-Expression` |
 
 Global flags: `--scope user|system|all` (default `user`; `all` is read-only),
 `--json`, `--dry-run` (prints the would-be diff, writes nothing), `-y` (skip
