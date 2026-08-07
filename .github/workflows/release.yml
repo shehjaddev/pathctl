@@ -27,9 +27,11 @@ jobs:
           CERT_PASS: ${{ secrets.CODE_SIGNING_PASS }}
         run: |
           if ($env:CERT_B64) {
-            $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Select-Object -First 1).FullName
+            $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+                        Where-Object { $_.FullName -match '\\x64\\' } |
+                        Sort-Object FullName -Descending | Select-Object -First 1
             [IO.File]::WriteAllBytes("$pwd\cert.pfx", [Convert]::FromBase64String($env:CERT_B64))
-            & $signtool sign /f cert.pfx /p $env:CERT_PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 target\release\pathctl.exe
+            & $signtool.FullName sign /f cert.pfx /p $env:CERT_PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 target\release\pathctl.exe
             if ($LASTEXITCODE -ne 0) { throw "signtool failed" }
           } else {
             Write-Host "No CODE_SIGNING_CERT secret — skipping Authenticode signing (unsigned release)"

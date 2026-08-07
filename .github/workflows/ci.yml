@@ -19,8 +19,13 @@ jobs:
       - name: Verify embedded longPathAware manifest
         shell: pwsh
         run: |
-          $mt = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter mt.exe | Select-Object -First 1).FullName
-          & $mt -nologo -inputresource:"$pwd\target\release\pathctl.exe";#1 -out:manifest.xml
+          $sdk = "C:\Program Files (x86)\Windows Kits\10\bin"
+          $mt = Get-ChildItem -Path $sdk -Recurse -Filter mt.exe |
+                Where-Object { $_.FullName -match '\\x64\\' } |
+                Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $mt) { throw "mt.exe not found under $sdk" }
+          & $mt.FullName -nologo "-inputresource:$pwd\target\release\pathctl.exe;#1" -out:manifest.xml
+          if ($LASTEXITCODE -ne 0) { throw "mt.exe failed" }
           if (-not (Select-String -Path manifest.xml -Pattern "longPathAware")) {
             throw "longPathAware not found in embedded manifest"
           }
