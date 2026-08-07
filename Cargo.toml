@@ -29,6 +29,9 @@ assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
 
+[build-dependencies]
+embed-manifest = "1.5"
+
 [profile.release]
 strip = true
 lto = true

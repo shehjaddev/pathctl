@@ -16,3 +16,12 @@ jobs:
       - run: cargo test
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build --release
+      - name: Verify embedded longPathAware manifest
+        shell: pwsh
+        run: |
+          $mt = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter mt.exe | Select-Object -First 1).FullName
+          & $mt -nologo -inputresource:"$pwd\target\release\pathctl.exe";#1 -out:manifest.xml
+          if (-not (Select-String -Path manifest.xml -Pattern "longPathAware")) {
+            throw "longPathAware not found in embedded manifest"
+          }
+          Write-Host "manifest embedded OK"
