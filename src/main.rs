@@ -8,7 +8,7 @@ mod registry;
 mod snapshot;
 mod util;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use commands::{Global, Result};
 use registry::{Registry, Scope};
 use std::process::ExitCode;
@@ -99,6 +99,11 @@ enum Cmd {
     },
     /// Import from a pathctl export (merge; never truncates)
     Import { file: std::path::PathBuf },
+    /// Generate shell completion scripts (bash, elvish, fish, powershell, zsh)
+    Completions {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
     /// Get, set or delete environment variables (user scope by default)
     Env {
         #[command(subcommand)]
@@ -179,6 +184,11 @@ fn run(cli: Cli, g: Global, reg: &Registry) -> Result<u8> {
         }
         Cmd::Export { output } => commands::export(reg, output.as_deref()),
         Cmd::Import { file } => commands::import(reg, &g, file),
+        Cmd::Completions { shell } => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(*shell, &mut cmd, "pathctl", &mut std::io::stdout());
+            Ok(0)
+        }
         Cmd::Env { cmd } => {
             let scopes = scope(false)?;
             match cmd {

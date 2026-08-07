@@ -547,6 +547,25 @@ fn usage_error_exits_2() {
     pathctl("usage", dir.path()).arg("bogus-command").assert().code(2);
 }
 
+#[test]
+fn completions_generate_for_each_shell() {
+    let dir = setup("completions");
+    for shell in ["bash", "elvish", "fish", "powershell", "zsh"] {
+        let out = pathctl("completions", dir.path())
+            .arg("completions")
+            .arg(shell)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{shell} completions must succeed");
+        let text = stdout(&out);
+        assert!(!text.is_empty(), "{shell} completions must not be empty");
+        assert!(
+            text.contains("pathctl"),
+            "{shell} completions must reference the binary name"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // export / import
 // ---------------------------------------------------------------------------
