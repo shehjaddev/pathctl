@@ -1,0 +1,42 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: Compute SHA256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash target\release\pathctl.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -NoNewline -Path sha256.txt -Value $hash
+          Write-Host "SHA256=$hash"
+      - name: Sign when a certificate secret is configured
+        shell: pwsh
+        env:
+          CERT_B64: ${{ secrets.CODE_SIGNING_CERT }}
+          CERT_PASS: ${{ secrets.CODE_SIGNING_PASS }}
+        run: |
+          if ($env:CERT_B64) {
+            $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Select-Object -First 1).FullName
+            [IO.File]::WriteAllBytes("$pwd\cert.pfx", [Convert]::FromBase64String($env:CERT_B64))
+            & $signtool sign /f cert.pfx /p $env:CERT_PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 target\release\pathctl.exe
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed" }
+          } else {
+            Write-Host "No CODE_SIGNING_CERT secret — skipping Authenticode signing (unsigned release)"
+          }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/release/pathctl.exe
+            sha256.txt
+          generate_release_notes: true
