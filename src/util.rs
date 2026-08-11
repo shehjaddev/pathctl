@@ -21,7 +21,11 @@ pub fn expand(s: &str) -> String {
     let n = unsafe {
         ExpandEnvironmentStringsW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32)
     };
-    if n > 0 {
+    // n is the size required including the NUL. n == 0 means expansion failed;
+    // n > buf.len() means the result (or its NUL) does not fit the buffer —
+    // slicing buf[..n-1] there would panic. Both fall back to the input,
+    // matching the documented "unresolvable or overlong result" behavior.
+    if n > 0 && (n as usize) <= buf.len() {
         String::from_utf16_lossy(&buf[..n as usize - 1])
     } else {
         s.to_string()
@@ -36,4 +40,22 @@ pub fn dir_exists(p: &str) -> bool {
 /// True if `p` contains a `%VAR%`-style reference.
 pub fn has_var_ref(p: &str) -> bool {
     p.contains('%')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_passthrough_without_vars() {
+        assert_eq!(expand(r"C:\tools"), r"C:\tools");
+        assert_eq!(expand(""), "");
+    }
+
+    #[test]
+    fn expand_resolves_real_var() {
+        // Unique name; process-scoped on Windows, no cleanup needed.
+        unsafe { std::env::set_var("PATHCTL_EXPAND_TEST", r"C:\resolved") };
+        assert_eq!(expand("%PATHCTL_EXPAND_TEST%"), r"C:\resolved");
+    }
 }

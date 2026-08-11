@@ -50,9 +50,11 @@ fn is_drive_root(s: &str) -> bool {
 }
 
 /// Case-insensitive equality per the spec's OrdinalIgnoreCase rule,
-/// with trailing-backslash equivalence.
+/// with trailing-backslash equivalence. Windows path comparison is
+/// case-insensitive for the full Unicode alphabet, not just ASCII
+/// (e.g. Cyrillic paths), so use Unicode-aware folding.
 pub fn eq(a: &str, b: &str) -> bool {
-    canon(a).eq_ignore_ascii_case(&canon(b))
+    canon(a).to_lowercase() == canon(b).to_lowercase()
 }
 
 /// Case-insensitive membership test.

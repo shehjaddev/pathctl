@@ -427,6 +427,94 @@ fn undo_kind_bogus_value_exits_2() {
 }
 
 #[test]
+fn undo_to_zero_exits_2() {
+    let dir = setup("undo_zero");
+    pathctl("undo_zero", dir.path())
+        .arg("add")
+        .arg(r"C:\pathctl-uz")
+        .assert()
+        .success();
+    // `--to 0` used to underflow (panic in debug builds); must be a usage error.
+    pathctl("undo_zero", dir.path())
+        .arg("undo")
+        .arg("--to")
+        .arg("0")
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn diff_to_out_of_range_exits_2() {
+    let dir = setup("diff_range");
+    pathctl("diff_range", dir.path())
+        .arg("add")
+        .arg(r"C:\pathctl-dr")
+        .assert()
+        .success();
+    // Used to silently diff against an empty base (false drift, exit 1).
+    pathctl("diff_range", dir.path())
+        .arg("diff")
+        .arg("--to")
+        .arg("99")
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn diff_scope_all_json_parses_as_one_document() {
+    let dir = setup("diff_json");
+    pathctl("diff_json", dir.path())
+        .arg("add")
+        .arg(r"C:\pathctl-dj")
+        .assert()
+        .success();
+    let out = pathctl("diff_json", dir.path())
+        .arg("diff")
+        .arg("--scope")
+        .arg("all")
+        .arg("--json")
+        .output()
+        .unwrap();
+    // Was two concatenated JSON objects; must be a single parseable document.
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("single JSON document");
+    assert!(v.is_array());
+    assert_eq!(v.as_array().unwrap().len(), 2, "user + system scopes");
+}
+
+#[test]
+fn import_ignores_reserved_path_variable() {
+    let dir = setup("import_pathvar");
+    let entry = r"C:\pathctl-ipv";
+    pathctl("import_pathvar", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
+    // Hand-crafted file with a rogue `Path` entry in variables.user that would
+    // overwrite the legit path.user value if imported naively.
+    let f = dir.path().join("rogue.json");
+    let rogue = serde_json::json!({
+        "tool": "pathctl",
+        "version": 1,
+        "path": { "user": { "value": entry, "ty": 2 }, "system": null },
+        "variables": { "user": [{ "name": "Path", "value": r"C:\evil", "ty": 2 }] },
+    });
+    std::fs::write(&f, serde_json::to_string(&rogue).unwrap()).unwrap();
+    pathctl("import_pathvar", dir.path())
+        .arg("import")
+        .arg(&f)
+        .assert()
+        .success();
+    pathctl("import_pathvar", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(entry))
+        .stdout(predicate::str::contains(r"C:\evil").not());
+}
+
+#[test]
 fn diff_tracks_external_drift_and_clears_after_undo() {
     let dir = setup("diff");
     let entry = r"C:\pathctl-diff";

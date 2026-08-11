@@ -205,6 +205,20 @@ fn write_var_elev(
     }
 }
 
+/// Delete with the same elevation contract as writes: a system-scope
+/// `PermissionDenied` without `--elevate` is exit 3, not a raw registry error.
+fn delete_var_elev(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Result<()> {
+    match reg.delete_var(scope, name) {
+        Ok(()) => Ok(()),
+        Err(e) => write_error_to_app(
+            g,
+            scope,
+            e,
+            "deleting system environment variables requires elevation; rerun with --elevate (UAC) or from an elevated shell",
+        ),
+    }
+}
+
 /// The shared mutation tail: snapshot → write → broadcast.
 fn commit_path(
     reg: &Registry,
@@ -219,7 +233,7 @@ fn commit_path(
         return Err(AppError::NoOp("PATH unchanged".into()));
     }
     guard_length("Path", after_raw)?;
-    snapshot::save(&Snapshot::with_ty(
+    let snap_path = snapshot::save(&Snapshot::with_ty(
         scope.label(),
         "Path",
         before_raw,
@@ -228,7 +242,14 @@ fn commit_path(
         Some(registry::reg_type_to_u32(before_ty.clone())),
     ))?;
     snapshot::prune()?;
-    write_path_elev(reg, g, scope, after_raw, before_ty)?;
+    if let Err(e) = write_path_elev(reg, g, scope, after_raw, before_ty) {
+        // The write failed (e.g. exit 3 without admin, or a registry error),
+        // so the just-saved snapshot claims a state that never happened.
+        // Best-effort remove it; otherwise `diff` would report false drift
+        // and `undo` would replay a no-op.
+        let _ = std::fs::remove_file(&snap_path);
+        return Err(e);
+    }
     warn_long_path(after_raw);
     if !g.no_broadcast {
         notify::broadcast_environment();
@@ -258,7 +279,7 @@ fn commit_var(
     let ty = before
         .map(|v| v.ty.clone())
         .or_else(|| after.as_ref().map(|(_, t)| t.clone()));
-    snapshot::save(&Snapshot::with_ty(
+    let snap_path = snapshot::save(&Snapshot::with_ty(
         scope.label(),
         name,
         &before_raw,
@@ -267,9 +288,15 @@ fn commit_var(
         ty.map(registry::reg_type_to_u32),
     ))?;
     snapshot::prune()?;
-    match &after {
-        Some((value, t)) => write_var_elev(reg, g, scope, name, value, t.clone())?,
-        None => reg.delete_var(scope, name)?,
+    let result = match &after {
+        Some((value, t)) => write_var_elev(reg, g, scope, name, value, t.clone()),
+        None => delete_var_elev(reg, g, scope, name),
+    };
+    if let Err(e) = result {
+        // Same phantom-snapshot guard as commit_path: a failed write must not
+        // leave a journal entry claiming the new state exists.
+        let _ = std::fs::remove_file(&snap_path);
+        return Err(e);
     }
     if !g.no_broadcast {
         notify::broadcast_environment();
@@ -680,8 +707,9 @@ pub fn undo(
 ) -> Result<u8> {
     let snaps = snapshots_filtered(scope_filter, kind)?;
     let target = match to {
-        Some(i) => snaps
-            .get(i - 1)
+        Some(i) => i
+            .checked_sub(1)
+            .and_then(|idx| snaps.get(idx))
             .ok_or_else(|| AppError::Usage(format!("no snapshot {i}")))?,
         None => snaps
             .last()
@@ -717,7 +745,20 @@ pub fn undo(
     confirm(g, &format!("undo '{}' ({})", target.command, target.ts))?;
     guard_length(&name, &restore_raw)?;
 
-    // Snapshot the inverse so undo is itself undoable (spec §4).
+    if name == "Path" {
+        write_path_elev(reg, g, scope, &restore_raw, ty)?;
+        warn_long_path(&restore_raw);
+    } else if restore_raw.is_empty() {
+        delete_var_elev(reg, g, scope, &name)?;
+    } else {
+        write_var_elev(reg, g, scope, &name, &restore_raw, ty)?;
+    }
+
+    // Snapshot the inverse AFTER the write succeeds so a failed restore
+    // (e.g. system scope without admin) cannot poison the journal: the next
+    // undo would otherwise target a snapshot whose restore is a no-op. The
+    // pre-undo state stays recoverable from the undone snapshot's `before`,
+    // so crash-safety is unchanged.
     snapshot::save(&Snapshot::with_ty(
         &target.scope,
         &name,
@@ -727,17 +768,6 @@ pub fn undo(
         current.as_ref().map(|v| registry::reg_type_to_u32(v.ty.clone())),
     ))?;
     snapshot::prune()?;
-
-    if name == "Path" {
-        write_path_elev(reg, g, scope, &restore_raw, ty)?;
-        warn_long_path(&restore_raw);
-    } else {
-        if restore_raw.is_empty() {
-            reg.delete_var(scope, &name)?;
-        } else {
-            write_var_elev(reg, g, scope, &name, &restore_raw, ty)?;
-        }
-    }
     if !g.no_broadcast {
         notify::broadcast_environment();
     }
@@ -749,6 +779,7 @@ pub fn undo(
 
 pub fn diff(reg: &Registry, g: &Global, scopes: &[Scope], to: Option<usize>) -> Result<u8> {
     let mut differs = false;
+    let mut docs: Vec<serde_json::Value> = Vec::new();
     for scope in scopes {
         let current_raw = reg.read_path(*scope)?.map(|v| v.raw).unwrap_or_default();
         let current = pathops::parse(&current_raw);
@@ -758,10 +789,13 @@ pub fn diff(reg: &Registry, g: &Global, scopes: &[Scope], to: Option<usize>) -> 
             .filter(|s| s.scope == scope.label() && s.name == "Path")
             .collect();
         let base_raw = match to {
-            Some(i) => snaps
-                .get(i - 1)
+            // Mirror undo: `--to 0` and out-of-range ids are usage errors,
+            // not an underflow panic or a silent empty base.
+            Some(i) => i
+                .checked_sub(1)
+                .and_then(|idx| snaps.get(idx))
                 .map(|s| s.after.as_str())
-                .unwrap_or(""),
+                .ok_or_else(|| AppError::Usage(format!("no snapshot {i}")))?,
             None => snaps.last().map(|s| s.after.as_str()).unwrap_or(""),
         };
         let base = pathops::parse(base_raw);
@@ -770,15 +804,12 @@ pub fn diff(reg: &Registry, g: &Global, scopes: &[Scope], to: Option<usize>) -> 
             differs = true;
         }
         if g.json {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "scope": scope.label(),
-                    "base": base,
-                    "current": current,
-                    "changes": changes,
-                })
-            );
+            docs.push(serde_json::json!({
+                "scope": scope.label(),
+                "base": base,
+                "current": current,
+                "changes": changes,
+            }));
         } else if changes.is_empty() {
             println!("[{}] no changes", scope.label());
         } else {
@@ -789,6 +820,10 @@ pub fn diff(reg: &Registry, g: &Global, scopes: &[Scope], to: Option<usize>) -> 
                 }
             }
         }
+    }
+    if g.json {
+        // One document even with `--scope all` (was N concatenated objects).
+        println!("{}", serde_json::to_string(&docs).expect("serialize"));
     }
     Ok(if differs { 1 } else { 0 })
 }
@@ -923,20 +958,39 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
     let data: ImportFile =
         serde_json::from_str(&text).map_err(|e| AppError::Usage(format!("invalid export JSON: {e}")))?;
 
+    // Bulk restore writes multiple values; confirm once up front like every
+    // other mutating command (skipped by -y / --dry-run).
+    if !g.dry_run {
+        confirm(g, "import")?;
+    }
+
     let mut planned = 0usize;
-    let apply_path = |scope: Scope, value: &ImportValue| -> Result<()> {
+    // Dry-run JSON accumulates into one document; the per-item printer emits
+    // one document per change, which would concatenate on stdout.
+    let mut dry_changes: Vec<serde_json::Value> = Vec::new();
+    let mut apply_path = |scope: Scope, value: &ImportValue| -> Result<()> {
         let (before_raw, before_ty) = current_path(reg, scope)?;
         if before_raw == value.value {
             return Ok(());
         }
         if g.dry_run {
-            print_changes(
-                g.json,
-                &pathops::parse(&before_raw),
-                &pathops::parse(&value.value),
-            );
+            if g.json {
+                dry_changes.push(serde_json::json!({
+                    "scope": scope.label(),
+                    "name": "Path",
+                    "before": pathops::parse(&before_raw),
+                    "after": pathops::parse(&value.value),
+                }));
+            } else {
+                print_changes(
+                    false,
+                    &pathops::parse(&before_raw),
+                    &pathops::parse(&value.value),
+                );
+            }
             return Ok(());
         }
+        planned += 1;
         commit_path(reg, g, scope, &before_raw, before_ty, &value.value, "import")
     };
 
@@ -947,30 +1001,47 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
         apply_path(Scope::System, v)?;
     }
     for var in &data.variables.user {
+        // Skip entries export would never produce: the reserved `Path` name
+        // (it lives in `path.*`; importing a rogue copy would overwrite the
+        // just-imported user PATH) and names that fail validation.
+        if var.name.eq_ignore_ascii_case("Path") || valid_var_name(&var.name).is_err() {
+            continue;
+        }
         let current = reg.read_var(Scope::User, &var.name)?;
         let ty = var
             .ty
             .map(registry::reg_type_from_u32)
             .or_else(|| current.as_ref().map(|v| v.ty.clone()))
             .unwrap_or_else(registry::default_var_type);
-        planned += 1;
         if g.dry_run {
             let before = current.as_ref().map(|v| v.raw.clone()).unwrap_or_default();
             if before != var.value {
-                print_changes(
-                    g.json,
-                    std::slice::from_ref(&before),
-                    std::slice::from_ref(&var.value),
-                );
+                if g.json {
+                    dry_changes.push(serde_json::json!({
+                        "scope": "user",
+                        "name": var.name,
+                        "before": [before],
+                        "after": [var.value],
+                    }));
+                } else {
+                    print_changes(
+                        false,
+                        std::slice::from_ref(&before),
+                        std::slice::from_ref(&var.value),
+                    );
+                }
             }
             continue;
         }
         if current.as_ref().map(|v| v.raw.as_str()) == Some(var.value.as_str()) {
             continue;
         }
+        planned += 1;
         commit_var(reg, g, Scope::User, &var.name, current.as_ref(), Some((&var.value, ty)), "import")?;
     }
-    if !g.json && !g.dry_run {
+    if g.json && g.dry_run {
+        println!("{}", serde_json::to_string(&dry_changes).expect("serialize"));
+    } else if !g.json && !g.dry_run {
         println!("import complete ({planned} change(s) applied)");
     }
     Ok(0)
@@ -1095,6 +1166,16 @@ mod tests {
         let err = write_error_to_app(&g, Scope::System, e, "elevate me").unwrap_err();
         assert_eq!(err.exit_code(), 5);
         assert!(matches!(err, AppError::Registry(_)));
+    }
+
+    #[test]
+    fn delete_var_elev_wraps_registry_delete() {
+        let reg = Registry::test();
+        reg.write_var(Scope::User, "PATHCTL_DEL_TEST", "x", registry::default_var_type())
+            .unwrap();
+        let g = Global::default();
+        delete_var_elev(&reg, &g, Scope::User, "PATHCTL_DEL_TEST").unwrap();
+        assert!(reg.read_var(Scope::User, "PATHCTL_DEL_TEST").unwrap().is_none());
     }
 
     #[test]
