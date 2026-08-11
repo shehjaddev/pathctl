@@ -10,7 +10,7 @@
 //! design). Never goes through `setx` (1024-char crop, documented data loss).
 
 use std::io;
-use winreg::enums::{KEY_READ, KEY_WRITE, REG_EXPAND_SZ, REG_SZ};
+use winreg::enums::{KEY_READ, KEY_SET_VALUE, KEY_WRITE, REG_EXPAND_SZ, REG_SZ};
 use winreg::{RegKey, RegValue, HKLM, HKCU};
 
 pub use winreg::enums::RegType;
@@ -108,8 +108,12 @@ impl Registry {
         let hive = self.hive(scope);
         match hive.open_subkey_with_flags(self.key_path(scope), access) {
             Ok(k) => Ok(k),
-            // Missing key on a fresh profile: create it.
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            // Missing key on a fresh profile: create it — but only when the
+            // caller asked for write access. Read commands must not mutate
+            // the registry; they treat a missing key as empty instead.
+            // (KEY_READ and KEY_WRITE share STANDARD_RIGHTS bits, so test the
+            // write-specific KEY_SET_VALUE bit, not the whole KEY_WRITE mask.)
+            Err(e) if e.kind() == io::ErrorKind::NotFound && access & KEY_SET_VALUE != 0 => {
                 hive.create_subkey(self.key_path(scope)).map(|(k, _)| k)
             }
             Err(e) => Err(e),
@@ -117,7 +121,13 @@ impl Registry {
     }
 
     fn read_value(&self, scope: Scope, name: &str) -> io::Result<Option<PathValue>> {
-        match self.open_read(scope)?.get_raw_value(name) {
+        let key = match self.open_read(scope) {
+            Ok(k) => k,
+            // Key absent → no values, not an error, and nothing created.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        match key.get_raw_value(name) {
             Ok(v) => Ok(Some(PathValue {
                 raw: decode(&v.bytes),
                 ty: v.vtype,
@@ -161,10 +171,16 @@ impl Registry {
         }
     }
 
-    /// All values under a scope key (export).
+    /// All values under a scope key (export). A missing key yields an empty
+    /// list (read-only; nothing is created).
     pub fn enum_all(&self, scope: Scope) -> io::Result<Vec<(String, PathValue)>> {
+        let key = match self.open_read(scope) {
+            Ok(k) => k,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
         let mut out = Vec::new();
-        for item in self.open_read(scope)?.enum_values() {
+        for item in key.enum_values() {
             let (name, v) = item?;
             out.push((
                 name,

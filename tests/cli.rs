@@ -444,6 +444,29 @@ fn undo_to_zero_exits_2() {
 }
 
 #[test]
+fn diff_without_baseline_reports_no_drift() {
+    let dir = setup("diff_nobase");
+    // No mutations → no snapshots. Must not flag the whole PATH as drift.
+    pathctl("diff_nobase", dir.path())
+        .arg("diff")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("no snapshots recorded yet"));
+}
+
+#[test]
+fn read_commands_do_not_create_the_key() {
+    let name = "list_nocreate";
+    cleanup(name);
+    let dir = tempfile::tempdir().unwrap();
+    pathctl(name, dir.path()).arg("list").assert().success();
+    let exists = winreg::HKCU
+        .open_subkey(format!(r"Software\pathctl-test-{name}"))
+        .is_ok();
+    assert!(!exists, "read-only list must not create the registry key");
+}
+
+#[test]
 fn diff_to_out_of_range_exits_2() {
     let dir = setup("diff_range");
     pathctl("diff_range", dir.path())

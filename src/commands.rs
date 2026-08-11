@@ -796,7 +796,29 @@ pub fn diff(reg: &Registry, g: &Global, scopes: &[Scope], to: Option<usize>) -> 
                 .and_then(|idx| snaps.get(idx))
                 .map(|s| s.after.as_str())
                 .ok_or_else(|| AppError::Usage(format!("no snapshot {i}")))?,
-            None => snaps.last().map(|s| s.after.as_str()).unwrap_or(""),
+            None => match snaps.last() {
+                Some(s) => s.after.as_str(),
+                None => {
+                    // No baseline: nothing was ever recorded, so there is no
+                    // drift to report. Treating "" as the baseline would flag
+                    // the entire PATH as added on a fresh install.
+                    if g.json {
+                        docs.push(serde_json::json!({
+                            "scope": scope.label(),
+                            "base": [],
+                            "current": current,
+                            "changes": [],
+                            "note": "no snapshots recorded yet — nothing to diff against",
+                        }));
+                    } else {
+                        println!(
+                            "[{}] no snapshots recorded yet (run a pathctl mutation to establish a baseline)",
+                            scope.label()
+                        );
+                    }
+                    continue;
+                }
+            },
         };
         let base = pathops::parse(base_raw);
         let changes = pathops::diff_entries(&base, &current);

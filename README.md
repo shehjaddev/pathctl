@@ -34,7 +34,7 @@ or build from source: `cargo build --release` (Rust 1.88+, Windows).
 | `pathctl prune` | remove entries whose directories no longer exist (dry-run to preview) | `pathctl prune --dry-run` |
 | `pathctl move <from> <to>` | reorder (1-based) | `pathctl move 5 1` |
 | `pathctl undo` | restore last snapshot (`--list` to browse, `--to <id>` specific, `--kind path\|env` to filter) | `pathctl undo --to 2` |
-| `pathctl diff` | current PATH vs last recorded state (exit 1 if drifted) | `pathctl diff --json` |
+| `pathctl diff` | current PATH vs last recorded state (exit 1 if drifted; no baseline yet prints a note, exit 0) | `pathctl diff --json` |
 | `pathctl export` / `pathctl import` | JSON backup/restore (merge; never truncates) | `pathctl export --output path.json` |
 | `pathctl env get/set/delete` | any environment variable, same snapshot/undo safety | `pathctl env set MY_FLAG 1` |
 | `pathctl completions <shell>` | completion script for bash, elvish, fish, powershell or zsh | `pathctl completions powershell \| Out-String \| Invoke-Expression` |
