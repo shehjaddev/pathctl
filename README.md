@@ -18,10 +18,16 @@ pathctl undo                       # changed your mind? restored
 
 ## Install
 
-- **Scoop** (once submitted to ScoopInstaller/Extras): `scoop install pathctl`
-- **Winget** (once submitted to microsoft/winget-pkgs): `winget install shehjaddev.pathctl`
+Currently available:
+
 - Download the release binary from [Releases](https://github.com/shehjaddev/pathctl/releases) (single static exe, no dependencies; `sha256.txt` in the release lists its checksum).
 - Or build from source: `cargo build --release` (Rust 1.88+, Windows).
+
+Package managers — **not available yet** (manifests and submission automation are
+ready; the packages are not submitted upstream):
+
+- Scoop: `scoop install pathctl`
+- Winget: `winget install shehjaddev.pathctl`
 
 > Packaging status: release automation is live (tag `v*` → release with binary
 > + checksum). Winget/scoop submission runs from the `publish` workflow
