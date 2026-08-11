@@ -143,6 +143,30 @@ fn confirm(g: &Global, action: &str) -> Result<()> {
     Ok(())
 }
 
+/// Map a registry write error to the elevation contract: a system-scope
+/// `PermissionDenied` without `--elevate` is `ElevationRequired` (exit 3);
+/// with `--elevate` the process relaunches via UAC. Anything else is a plain
+/// registry error (exit 5). Extracted from the write helpers so the exit-3
+/// contract is unit-testable (handoff #4).
+fn write_error_to_app(
+    g: &Global,
+    scope: Scope,
+    e: io::Error,
+    elevate_msg: &str,
+) -> Result<()> {
+    if scope == Scope::System && e.kind() == io::ErrorKind::PermissionDenied {
+        if g.elevate {
+            crate::elevate::relaunch_elevated()
+                .map_err(|e| AppError::Other(format!("elevation failed: {e}")))?;
+            Ok(())
+        } else {
+            Err(AppError::ElevationRequired(elevate_msg.into()))
+        }
+    } else {
+        Err(AppError::Registry(e))
+    }
+}
+
 /// Write with elevation fallback for system scope (exit 3 / --elevate).
 fn write_path_elev(
     reg: &Registry,
@@ -153,19 +177,12 @@ fn write_path_elev(
 ) -> Result<()> {
     match reg.write_path(scope, value, ty) {
         Ok(()) => Ok(()),
-        Err(e) if scope == Scope::System && e.kind() == io::ErrorKind::PermissionDenied => {
-            if g.elevate {
-                crate::elevate::relaunch_elevated()
-                    .map_err(|e| AppError::Other(format!("elevation failed: {e}")))?;
-                Ok(())
-            } else {
-                Err(AppError::ElevationRequired(
-                    "writing the system PATH requires elevation; rerun with --elevate (UAC) or from an elevated shell"
-                        .into(),
-                ))
-            }
-        }
-        Err(e) => Err(AppError::Registry(e)),
+        Err(e) => write_error_to_app(
+            g,
+            scope,
+            e,
+            "writing the system PATH requires elevation; rerun with --elevate (UAC) or from an elevated shell",
+        ),
     }
 }
 
@@ -179,19 +196,12 @@ fn write_var_elev(
 ) -> Result<()> {
     match reg.write_var(scope, name, value, ty) {
         Ok(()) => Ok(()),
-        Err(e) if scope == Scope::System && e.kind() == io::ErrorKind::PermissionDenied => {
-            if g.elevate {
-                crate::elevate::relaunch_elevated()
-                    .map_err(|e| AppError::Other(format!("elevation failed: {e}")))?;
-                Ok(())
-            } else {
-                Err(AppError::ElevationRequired(
-                    "writing system environment variables requires elevation; rerun with --elevate (UAC) or from an elevated shell"
-                        .into(),
-                ))
-            }
-        }
-        Err(e) => Err(AppError::Registry(e)),
+        Err(e) => write_error_to_app(
+            g,
+            scope,
+            e,
+            "writing system environment variables requires elevation; rerun with --elevate (UAC) or from an elevated shell",
+        ),
     }
 }
 
@@ -613,16 +623,34 @@ fn parse_index(target: &str) -> Option<usize> {
 // Undo / diff
 // ---------------------------------------------------------------------------
 
-fn snapshots_filtered(scope_filter: Option<Scope>) -> Result<Vec<Snapshot>> {
+/// Which snapshot domain an `undo --kind` filter selects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotKind {
+    /// PATH snapshots (name `Path`).
+    Path,
+    /// Environment-variable snapshots (any other name).
+    Var,
+}
+
+fn snapshots_filtered(
+    scope_filter: Option<Scope>,
+    kind: Option<SnapshotKind>,
+) -> Result<Vec<Snapshot>> {
     let snaps = snapshot::list()?;
     Ok(snaps
         .into_iter()
         .filter(|s| scope_filter.is_none_or(|sc| s.scope == sc.label()))
+        .filter(|s| {
+            kind.is_none_or(|k| match k {
+                SnapshotKind::Path => s.name == "Path",
+                SnapshotKind::Var => s.name != "Path",
+            })
+        })
         .collect())
 }
 
-pub fn undo_list(g: &Global, scope_filter: Option<Scope>) -> Result<u8> {
-    let snaps = snapshots_filtered(scope_filter)?;
+pub fn undo_list(g: &Global, scope_filter: Option<Scope>, kind: Option<SnapshotKind>) -> Result<u8> {
+    let snaps = snapshots_filtered(scope_filter, kind)?;
     if g.json {
         println!("{}", serde_json::to_string(&snaps).expect("serialize"));
     } else if snaps.is_empty() {
@@ -647,9 +675,10 @@ pub fn undo(
     reg: &Registry,
     g: &Global,
     scope_filter: Option<Scope>,
+    kind: Option<SnapshotKind>,
     to: Option<usize>,
 ) -> Result<u8> {
-    let snaps = snapshots_filtered(scope_filter)?;
+    let snaps = snapshots_filtered(scope_filter, kind)?;
     let target = match to {
         Some(i) => snaps
             .get(i - 1)
@@ -800,6 +829,20 @@ struct ExportVar {
     ty: u32,
 }
 
+/// Refuse POSIX/MSYS-style output paths: on Windows a leading `/` means
+/// "root of the current drive", so `/c/Users/...` from git-bash either fails
+/// with a confusing error or writes somewhere unexpected. Failing loudly beats
+/// a backup command that silently wrote nothing (handoff #1).
+fn check_output_path(path: &std::path::Path) -> Result<()> {
+    let s = path.as_os_str().to_string_lossy();
+    if s.starts_with('/') {
+        return Err(AppError::Usage(format!(
+            "refusing non-Windows output path '{s}': use a Windows path such as C:\\backup.json"
+        )));
+    }
+    Ok(())
+}
+
 pub fn export(reg: &Registry, output: Option<&std::path::Path>) -> Result<u8> {
     let read = |scope: Scope| -> Result<Option<ExportValue>> {
         Ok(reg.read_path(scope)?.map(|v| ExportValue {
@@ -810,6 +853,9 @@ pub fn export(reg: &Registry, output: Option<&std::path::Path>) -> Result<u8> {
     let vars = reg
         .enum_all(Scope::User)?
         .into_iter()
+        // Path already lives in `path.*`; repeating it in `variables.user`
+        // exported the same value twice (handoff #3).
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("Path"))
         .map(|(name, v)| ExportVar {
             name,
             value: v.raw,
@@ -827,8 +873,11 @@ pub fn export(reg: &Registry, output: Option<&std::path::Path>) -> Result<u8> {
     };
     let json = serde_json::to_string_pretty(&file).map_err(|e| AppError::Other(e.to_string()))?;
     match output {
-        Some(path) => std::fs::write(path, json)
-            .map_err(|e| AppError::Other(format!("could not write {}: {e}", path.display())))?,
+        Some(path) => {
+            check_output_path(path)?;
+            std::fs::write(path, json)
+                .map_err(|e| AppError::Other(format!("could not write {}: {e}", path.display())))?;
+        }
         None => println!("{json}"),
     }
     Ok(0)
@@ -1017,5 +1066,44 @@ mod tests {
         let err = guard_length("X", &over).unwrap_err();
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("limit"));
+    }
+
+    #[test]
+    fn system_write_denied_maps_to_exit_3_without_elevate() {
+        let g = Global::default();
+        let e = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        let err = write_error_to_app(&g, Scope::System, e, "elevate me").unwrap_err();
+        assert_eq!(err.exit_code(), 3, "README contract: exit 3 = elevation required");
+        assert!(matches!(err, AppError::ElevationRequired(_)));
+    }
+
+    #[test]
+    fn user_scope_denied_is_registry_error_not_exit_3() {
+        // Elevation never applies to user scope, even with --elevate (which
+        // would otherwise relaunch — this proves the branch is scope-gated).
+        let g = Global { elevate: true, ..Global::default() };
+        let e = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        let err = write_error_to_app(&g, Scope::User, e, "elevate me").unwrap_err();
+        assert_eq!(err.exit_code(), 5);
+        assert!(matches!(err, AppError::Registry(_)));
+    }
+
+    #[test]
+    fn system_non_permission_error_is_registry_error() {
+        let g = Global::default();
+        let e = io::Error::new(io::ErrorKind::NotFound, "missing");
+        let err = write_error_to_app(&g, Scope::System, e, "elevate me").unwrap_err();
+        assert_eq!(err.exit_code(), 5);
+        assert!(matches!(err, AppError::Registry(_)));
+    }
+
+    #[test]
+    fn export_refuses_non_windows_output_path() {
+        let err =
+            check_output_path(std::path::Path::new("/c/Users/User/backup.json")).unwrap_err();
+        assert_eq!(err.exit_code(), 2);
+        assert!(err.to_string().contains("non-Windows"));
+        assert!(check_output_path(std::path::Path::new(r"C:\backup.json")).is_ok());
+        assert!(check_output_path(std::path::Path::new(r"\\server\share\backup.json")).is_ok());
     }
 }

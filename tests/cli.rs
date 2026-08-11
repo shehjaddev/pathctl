@@ -358,6 +358,75 @@ fn undo_with_nothing_exits_4() {
 }
 
 #[test]
+fn undo_kind_filter_selects_domain() {
+    let dir = setup("undo_kind");
+    let entry = r"C:\pathctl-uk";
+    pathctl("undo_kind", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("undo_kind", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg("PATHCTL_UK_FLAG")
+        .arg("1")
+        .assert()
+        .success();
+    pathctl("undo_kind", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg("PATHCTL_UK_FLAG")
+        .arg("2")
+        .assert()
+        .success();
+    // Newest snapshot is the env var; --kind path must skip it and undo the add.
+    pathctl("undo_kind", dir.path())
+        .arg("undo")
+        .arg("--kind")
+        .arg("path")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("restored Path"));
+    pathctl("undo_kind", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(entry).not());
+    // The env var was untouched by the path undo.
+    pathctl("undo_kind", dir.path())
+        .arg("env")
+        .arg("get")
+        .arg("PATHCTL_UK_FLAG")
+        .assert()
+        .success()
+        .stdout("2\n");
+    // --kind env targets the env snapshots only.
+    pathctl("undo_kind", dir.path())
+        .arg("undo")
+        .arg("--kind")
+        .arg("env")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("restored PATHCTL_UK_FLAG"));
+    pathctl("undo_kind", dir.path())
+        .arg("env")
+        .arg("get")
+        .arg("PATHCTL_UK_FLAG")
+        .assert()
+        .success()
+        .stdout("1\n");
+}
+
+#[test]
+fn undo_kind_bogus_value_exits_2() {
+    let dir = setup("undo_kind_bad");
+    pathctl("undo_kind_bad", dir.path())
+        .arg("undo")
+        .arg("--kind")
+        .arg("bogus")
+        .assert()
+        .code(2);
+}
+
+#[test]
 fn diff_tracks_external_drift_and_clears_after_undo() {
     let dir = setup("diff");
     let entry = r"C:\pathctl-diff";
@@ -619,6 +688,49 @@ fn export_import_roundtrip() {
         .assert()
         .success()
         .stdout(predicate::str::contains(entry));
+}
+
+#[test]
+fn export_excludes_path_from_variables() {
+    let dir = setup("export_dedupe");
+    let entry = r"C:\pathctl-ed";
+    pathctl("export_dedupe", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("export_dedupe", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg("PATHCTL_ED_VAR")
+        .arg("v")
+        .assert()
+        .success();
+    let out = pathctl("export_dedupe", dir.path())
+        .arg("export")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).expect("valid export JSON");
+    // Path is represented exactly once, in path.user — not repeated in variables.user.
+    assert!(v["path"]["user"]["value"].as_str().unwrap().contains(entry));
+    let vars = v["variables"]["user"].as_array().unwrap();
+    assert!(
+        vars.iter()
+            .all(|x| !x["name"].as_str().unwrap().eq_ignore_ascii_case("path")),
+        "Path must not be duplicated in variables.user"
+    );
+    assert_eq!(vars.len(), 1, "only PATHCTL_ED_VAR should remain");
+}
+
+#[test]
+fn export_refuses_non_windows_output_path() {
+    let dir = setup("export_posix");
+    pathctl("export_posix", dir.path())
+        .arg("export")
+        .arg("--output")
+        .arg("/tmp/export.json")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("non-Windows"));
 }
 
 #[test]

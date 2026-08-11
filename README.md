@@ -39,7 +39,7 @@ pathctl undo                       # changed your mind? restored
 | `pathctl dedupe` | drop duplicates, keep first | `pathctl dedupe` |
 | `pathctl prune` | remove entries whose directories no longer exist (dry-run to preview) | `pathctl prune --dry-run` |
 | `pathctl move <from> <to>` | reorder (1-based) | `pathctl move 5 1` |
-| `pathctl undo` | restore last snapshot (`--list` to browse, `--to <id>` specific) | `pathctl undo --to 2` |
+| `pathctl undo` | restore last snapshot (`--list` to browse, `--to <id>` specific, `--kind path\|env` to filter) | `pathctl undo --to 2` |
 | `pathctl diff` | current PATH vs last recorded state (exit 1 if drifted) | `pathctl diff --json` |
 | `pathctl export` / `pathctl import` | JSON backup/restore (merge; never truncates) | `pathctl export --output path.json` |
 | `pathctl env get/set/delete` | any environment variable, same snapshot/undo safety | `pathctl env set MY_FLAG 1` |
@@ -100,3 +100,5 @@ It sets and undoes a uniquely named variable (`PATHCTL_REAL_SMOKE`).
   setting `LongPathsEnabled` is on.
 - Import never truncates: the 32,767-character guard applies to every
   imported value too.
+- `export --output` takes Windows paths; POSIX/MSYS-style paths (`/c/...`)
+  are refused with an error rather than silently writing nothing.
