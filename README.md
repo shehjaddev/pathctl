@@ -26,7 +26,7 @@ or build from source: `cargo build --release` (Rust 1.88+, Windows).
 
 | Command | Purpose | Example |
 |---|---|---|
-| `pathctl list` | numbered entries; `!` missing dir, `d` duplicate, `%` unresolvable variable | `pathctl list --scope all` |
+| `pathctl list` | numbered entries; `!` missing dir, `d` duplicate, `%` unresolvable variable, `e` expandable (`%VAR%`) entry | `pathctl list --scope all` |
 | `pathctl check` | analyze: dups, missing dirs, >260-char entries, near-limit (exit 1 if findings) | `pathctl check` |
 | `pathctl add <dir>` | append (or `--prepend`) a directory; `--dedupe` = no-op if present | `pathctl add C:\tools --prepend` |
 | `pathctl remove <dir\|#index>` | remove by path or 1-based list index | `pathctl remove 3` |

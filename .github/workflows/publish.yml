@@ -30,10 +30,21 @@ jobs:
         run: |
           if (-not $env:WINGET_PAT) {
             Write-Host "No WINGET_PAT secret — winget submission skipped."
-            Write-Host "Manual: wingetcreate update shehjaddev.pathctl -v $env:VERSION -u $env:INSTALLER_URL -s $env:INSTALLER_SHA256 --submit"
+            Write-Host "First submission is interactive and must be run once on a dev machine:"
+            Write-Host "  wingetcreate new $env:INSTALLER_URL --token <WINGET_PAT>"
+            Write-Host "Later versions publish automatically from this workflow:"
+            Write-Host "  wingetcreate update shehjaddev.pathctl --version $env:VERSION --urls $env:INSTALLER_URL --submit --token <WINGET_PAT>"
             exit 0
           }
-          wingetcreate update shehjaddev.pathctl --version $env:VERSION --urls $env:INSTALLER_URL --hash $env:INSTALLER_SHA256 --submit --token $env:WINGET_PAT
+          # `update` only works once the package exists in microsoft/winget-pkgs;
+          # wingetcreate computes hashes itself (no --hash flag). The first
+          # submission is a one-time interactive `wingetcreate new` (above).
+          wingetcreate update shehjaddev.pathctl --version $env:VERSION --urls $env:INSTALLER_URL --submit --token $env:WINGET_PAT
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "update failed — expected while the package is not yet in microsoft/winget-pkgs."
+            Write-Host "Run the first submission manually: wingetcreate new $env:INSTALLER_URL --token <WINGET_PAT>"
+            exit 0
+          }
       - name: Write scoop manifest
         shell: pwsh
         run: |
@@ -55,6 +66,9 @@ jobs:
         shell: pwsh
         env:
           SCOOP_PAT: ${{ secrets.SCOOP_PAT }}
+          # gh must authenticate as the PAT owner to open a PR to another repo
+          # (the default GITHUB_TOKEN cannot).
+          GH_TOKEN: ${{ secrets.SCOOP_PAT }}
         run: |
           if (-not $env:SCOOP_PAT) {
             Write-Host "No SCOOP_PAT secret — scoop submission skipped (manifest ready; open a PR to ScoopInstaller/Extras with packaging/pathctl.json)"
@@ -63,7 +77,10 @@ jobs:
           git config user.name "shehjaddev"
           git config user.email "95466889+shehjaddev@users.noreply.github.com"
           git checkout -b "scoop/pathctl-$env:VERSION"
-          git add packaging/pathctl.json
+          # ScoopInstaller/Extras keeps manifests at the bucket root, not in a
+          # subdirectory — copy the generated manifest there before committing.
+          Copy-Item packaging/pathctl.json ./pathctl.json
+          git add pathctl.json
           git commit -m "pathctl: add $env:VERSION"
           git remote add fork "https://x-access-token:$env:SCOOP_PAT@github.com/shehjaddev/scoop-extras.git"
           git push fork "scoop/pathctl-$env:VERSION" --force
