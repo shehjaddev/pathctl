@@ -244,7 +244,9 @@ fn encode(s: &str) -> Vec<u8> {
 
 fn decode(bytes: &[u8]) -> String {
     let mut wide: Vec<u16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
     while wide.last() == Some(&0) {
