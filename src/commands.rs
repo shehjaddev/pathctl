@@ -132,7 +132,7 @@ fn confirm(g: &Global, action: &str) -> Result<()> {
         return Ok(());
     }
     eprint!("{action}? [y/N] ");
-    let _ = io::Write::flush(&mut io::stdout());
+    let _ = io::Write::flush(&mut io::stderr());
     let mut line = String::new();
     io::stdin()
         .read_line(&mut line)
@@ -510,15 +510,22 @@ pub fn add(
 pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<u8> {
     let (before_raw, before_ty) = current_path(reg, scope)?;
     let mut entries = pathops::parse(&before_raw);
-    let removed = if let Some(idx) = parse_index(target) {
+    // `#3` is always an index. A bare number prefers an exact path match
+    // first (so a directory literally named `123` stays removable by path),
+    // falling back to index for backwards compatibility with `remove 3`.
+    let removed = if let Some(hash_idx) = target
+        .strip_prefix('#')
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        pathops::remove_index(&mut entries, hash_idx)
+            .map_err(|e| AppError::Usage(e.to_string()))?
+    } else if let Some(pos) = entries.iter().position(|e| pathops::eq(e, target)) {
+        entries.remove(pos)
+    } else if let Some(idx) = parse_index(target) {
         pathops::remove_index(&mut entries, idx)
             .map_err(|e| AppError::Usage(e.to_string()))?
     } else {
-        let pos = entries
-            .iter()
-            .position(|e| pathops::eq(e, target))
-            .ok_or_else(|| AppError::NoOp(format!("{target} is not in PATH")))?;
-        entries.remove(pos)
+        return Err(AppError::NoOp(format!("{target} is not in PATH")));
     };
     let after_raw = entries.join(";");
 
@@ -715,10 +722,14 @@ pub fn undo(
             .last()
             .ok_or_else(|| AppError::NoOp("nothing to undo".into()))?,
     };
-    let scope = if target.scope == "system" {
-        Scope::System
-    } else {
-        Scope::User
+    let scope = match target.scope.as_str() {
+        "system" => Scope::System,
+        "user" => Scope::User,
+        other => {
+            return Err(AppError::Usage(format!(
+                "snapshot has unknown scope '{other}' (expected user or system)"
+            )));
+        }
     };
     let name = target.name.clone();
     let restore_raw = target.before.clone();
