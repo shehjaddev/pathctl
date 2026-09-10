@@ -849,10 +849,12 @@ pub fn undo(
 pub fn diff(reg: &Registry, g: &Global, scopes: &[Scope], to: Option<usize>) -> Result<u8> {
     let mut differs = false;
     let mut docs: Vec<serde_json::Value> = Vec::new();
+    // Read once: the journal does not change mid-diff, and this avoids
+    // duplicate corrupt-snapshot warnings under `--scope all`.
+    let all = snapshot::list()?;
     for scope in scopes {
         let current_raw = reg.read_path(*scope)?.map(|v| v.raw).unwrap_or_default();
         let current = pathops::parse(&current_raw);
-        let all = snapshot::list()?;
         let snaps: Vec<&Snapshot> = all
             .iter()
             .filter(|s| s.scope == scope.label() && s.name == "Path")
