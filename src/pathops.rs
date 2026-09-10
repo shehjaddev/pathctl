@@ -32,10 +32,12 @@ pub fn trim_quotes(s: &str) -> &str {
     }
 }
 
-/// Canonical comparison form: quotes trimmed, trailing backslashes stripped,
-/// except at drive roots where the root backslash is mandatory (`C:\`).
+/// Canonical comparison form: quotes trimmed, `/` normalized to `\`,
+/// trailing backslashes stripped, except at drive roots where the root
+/// backslash is mandatory (`C:\`).
 pub fn canon(s: &str) -> String {
-    let t = trim_quotes(s).trim_end_matches('\\');
+    let normalized = trim_quotes(s).replace('/', "\\");
+    let t = normalized.trim_end_matches('\\');
     if is_drive_root(t) {
         format!("{t}\\")
     } else {
@@ -111,19 +113,43 @@ pub enum PathOpsError {
 pub enum Change {
     Added(String),
     Removed(String),
+    Moved(String),
 }
 
-/// Set-style diff: entries only in `after` are Added, only in `before` Removed.
+/// Order- and multiplicity-aware diff.
+///
+/// Entries are matched one-to-one (case-insensitive) so duplicates count:
+/// `[a,a] -> [a]` reports one `Removed`. When nothing was added or removed
+/// but the order changed (e.g. `move`), entries whose position changed are
+/// reported as `Moved` so reorders and dry-runs are never silently empty.
 pub fn diff_entries(before: &[String], after: &[String]) -> Vec<Change> {
+    let mut used = vec![false; before.len()];
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
     let mut out = Vec::new();
-    for e in after {
-        if !contains(before, e) {
+    for (after_idx, e) in after.iter().enumerate() {
+        if let Some(before_idx) = before
+            .iter()
+            .enumerate()
+            .find(|(bi, b)| !used[*bi] && eq(b, e))
+            .map(|(bi, _)| bi)
+        {
+            used[before_idx] = true;
+            pairs.push((before_idx, after_idx));
+        } else {
             out.push(Change::Added(e.clone()));
         }
     }
-    for e in before {
-        if !contains(after, e) {
+    for (bi, e) in before.iter().enumerate() {
+        if !used[bi] {
             out.push(Change::Removed(e.clone()));
+        }
+    }
+    // Pure reorder: no adds/removes, but positions differ.
+    if out.is_empty() {
+        for (bi, ai) in pairs {
+            if bi != ai {
+                out.push(Change::Moved(after[ai].clone()));
+            }
         }
     }
     out

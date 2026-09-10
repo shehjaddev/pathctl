@@ -93,6 +93,7 @@ fn print_changes(json: bool, before: &[String], after: &[String]) {
             match c {
                 Change::Added(e) => println!("+ {e}"),
                 Change::Removed(e) => println!("- {e}"),
+                Change::Moved(e) => println!("~ {e}"),
             }
         }
     }
@@ -850,6 +851,7 @@ pub fn diff(reg: &Registry, g: &Global, scopes: &[Scope], to: Option<usize>) -> 
                 match c {
                     Change::Added(e) => println!("[{}] + {e}", scope.label()),
                     Change::Removed(e) => println!("[{}] - {e}", scope.label()),
+                    Change::Moved(e) => println!("[{}] ~ {e} (moved)", scope.label()),
                 }
             }
         }
