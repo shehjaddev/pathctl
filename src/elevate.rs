@@ -73,11 +73,31 @@ pub fn relaunch_elevated() -> io::Result<()> {
             SW_SHOWNORMAL,
         )
     };
-    // ShellExecuteW returns an HINSTANCE; values <= 32 are error codes.
-    if res as isize > 32 {
+    // ShellExecuteW returns an HINSTANCE; values <= 32 are SE_ERR_* codes
+    // (not GetLastError), so map them to messages directly.
+    let code = res as isize;
+    if code > 32 {
         Ok(())
     } else {
-        Err(io::Error::last_os_error())
+        Err(io::Error::other(format!(
+            "elevation launch failed: {}",
+            match code {
+                0 => "out of memory".to_string(),
+                2 => "file not found".to_string(),
+                3 => "path not found".to_string(),
+                5 => "access denied (UAC declined?)".to_string(),
+                8 => "out of memory".to_string(),
+                11 => "invalid executable format".to_string(),
+                26 => "sharing violation".to_string(),
+                27 => "file association incomplete".to_string(),
+                28 => "DDE timeout".to_string(),
+                29 => "DDE transaction failed".to_string(),
+                30 => "DDE busy".to_string(),
+                31 => "no application associated".to_string(),
+                32 => "DLL not found".to_string(),
+                _ => format!("unknown error {code}"),
+            }
+        )))
     }
 }
 
