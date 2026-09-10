@@ -37,9 +37,29 @@ pub fn dir_exists(p: &str) -> bool {
     std::path::Path::new(p).is_dir()
 }
 
-/// True if `p` contains a `%VAR%`-style reference.
+/// True if `p` contains a `%VAR%`-style reference (`%NAME%` with a
+/// non-empty name). A lone `%` (e.g. `C:\100%_coverage`) is not a reference.
 pub fn has_var_ref(p: &str) -> bool {
-    p.contains('%')
+    let bytes = p.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j] != b'%' {
+                // Variable names never contain path separators or `;`;
+                // bail early so `C:\a%b\c` is not treated as a reference.
+                if bytes[j] == b'\\' || bytes[j] == b'/' || bytes[j] == b';' {
+                    break;
+                }
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'%' && j > i + 1 {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 #[cfg(test)]
