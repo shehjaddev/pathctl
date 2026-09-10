@@ -296,7 +296,9 @@ fn commit_var(
     let before_raw = before.map(|v| v.raw.clone()).unwrap_or_default();
     let after_str = after.as_ref().map(|(v, _)| v.to_string());
     let after_raw = after_str.clone().unwrap_or_default();
-    if before_raw == after_raw {
+    let before_ty = before.map(|v| v.ty.clone());
+    let after_ty = after.as_ref().map(|(_, t)| t.clone());
+    if before_raw == after_raw && before_ty == after_ty {
         return Err(AppError::NoOp(format!("{name} already in that state")));
     }
     if let Some((value, _)) = &after {
@@ -367,11 +369,10 @@ pub fn list(reg: &Registry, g: &Global, scopes: &[Scope], raw: bool) -> Result<u
         };
         let mut rows = Vec::new();
         for (i, entry) in entries.iter().enumerate() {
-            let expanded = if raw {
-                entry.clone()
-            } else {
-                util::expand(entry)
-            };
+            // Validation always runs on the expanded form: in `--raw` mode
+            // only the `expanded` flag is suppressed, so a resolvable
+            // `%VAR%` entry is not misreported as missing.
+            let expanded = util::expand(entry);
             let mut flags = Vec::new();
             if !raw && expanded != *entry {
                 flags.push("expanded");
@@ -1045,6 +1046,80 @@ struct ImportVar {
     ty: Option<u32>,
 }
 
+/// Short display name for common registry types (dry-run notes).
+fn ty_name(ty: RegType) -> String {
+    match registry::reg_type_to_u32(ty) {
+        1 => "REG_SZ".to_string(),
+        2 => "REG_EXPAND_SZ".to_string(),
+        n => format!("type {n}"),
+    }
+}
+
+/// Current state plus target type for an imported PATH value.
+fn path_import_state(
+    reg: &Registry,
+    scope: Scope,
+    value: &ImportValue,
+) -> Result<(String, RegType, RegType)> {
+    let (before_raw, before_ty) = current_path(reg, scope)?;
+    let write_ty = value
+        .ty
+        .map(registry::reg_type_from_u32)
+        .unwrap_or_else(|| before_ty.clone());
+    Ok((before_raw, before_ty, write_ty))
+}
+
+/// Would importing `var` change anything? Mirrors `env set` conventions:
+/// an unset variable with an empty value is a no-op.
+fn var_import_changes(current: Option<&PathValue>, var: &ImportVar) -> bool {
+    let before_raw = current.map(|v| v.raw.as_str()).unwrap_or("");
+    if before_raw != var.value.as_str() {
+        return true;
+    }
+    match current {
+        None => false,
+        Some(v) => var
+            .ty
+            .is_some_and(|t| registry::reg_type_from_u32(t) != v.ty),
+    }
+}
+
+/// Target type for an imported variable (file type, else keep, else default).
+fn var_import_ty(current: Option<&PathValue>, var: &ImportVar) -> RegType {
+    var.ty
+        .map(registry::reg_type_from_u32)
+        .or_else(|| current.map(|v| v.ty.clone()))
+        .unwrap_or_else(registry::default_var_type)
+}
+
+/// Count the changes an import would apply, without writing anything.
+/// Mirrors the apply logic below (value and type per item).
+fn import_plan_count(reg: &Registry, data: &ImportFile) -> Result<usize> {
+    let mut n = 0;
+    for (scope, value) in [
+        (Scope::User, data.path.user.as_ref()),
+        (Scope::System, data.path.system.as_ref()),
+    ]
+    .into_iter()
+    .filter_map(|(s, v)| v.map(|v| (s, v)))
+    {
+        let (before_raw, before_ty, write_ty) = path_import_state(reg, scope, value)?;
+        if before_raw != value.value || before_ty != write_ty {
+            n += 1;
+        }
+    }
+    for var in &data.variables.user {
+        if var.name.eq_ignore_ascii_case("Path") || valid_var_name(&var.name).is_err() {
+            continue;
+        }
+        let current = reg.read_var(Scope::User, &var.name)?;
+        if var_import_changes(current.as_ref(), var) {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 /// Import merges: nothing existing is deleted, and no write may truncate
 /// (the 32,767 guard applies per variable, spec §4).
 pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> {
@@ -1052,6 +1127,12 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
         .map_err(|e| AppError::Usage(format!("cannot read {}: {e}", file.display())))?;
     let data: ImportFile =
         serde_json::from_str(&text).map_err(|e| AppError::Usage(format!("invalid export JSON: {e}")))?;
+
+    // Read-only plan first: exit 4 when nothing would change (like every
+    // other command's NoOp), and only prompt when there is real work.
+    if import_plan_count(reg, &data)? == 0 {
+        return Err(AppError::NoOp("import: nothing to change".into()));
+    }
 
     // Bulk restore writes multiple values; confirm once up front like every
     // other mutating command (skipped by -y / --dry-run).
@@ -1064,11 +1145,7 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
     // one document per change, which would concatenate on stdout.
     let mut dry_changes: Vec<serde_json::Value> = Vec::new();
     let mut apply_path = |scope: Scope, value: &ImportValue| -> Result<bool> {
-        let (before_raw, before_ty) = current_path(reg, scope)?;
-        let write_ty = value
-            .ty
-            .map(registry::reg_type_from_u32)
-            .unwrap_or_else(|| before_ty.clone());
+        let (before_raw, before_ty, write_ty) = path_import_state(reg, scope, value)?;
         if before_raw == value.value && before_ty == write_ty {
             return Ok(false);
         }
@@ -1079,7 +1156,16 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
                     "name": "Path",
                     "before": pathops::parse(&before_raw),
                     "after": pathops::parse(&value.value),
+                    "ty_before": registry::reg_type_to_u32(before_ty.clone()),
+                    "ty_after": registry::reg_type_to_u32(write_ty.clone()),
                 }));
+            } else if before_raw == value.value {
+                println!(
+                    "~ Path [{}] (type {} -> {})",
+                    scope.label(),
+                    ty_name(before_ty),
+                    ty_name(write_ty)
+                );
             } else {
                 print_changes(
                     false,
@@ -1111,14 +1197,10 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
             continue;
         }
         let current = reg.read_var(Scope::User, &var.name)?;
-        let ty = var
-            .ty
-            .map(registry::reg_type_from_u32)
-            .or_else(|| current.as_ref().map(|v| v.ty.clone()))
-            .unwrap_or_else(registry::default_var_type);
+        let ty = var_import_ty(current.as_ref(), var);
         if g.dry_run {
-            let before = current.as_ref().map(|v| v.raw.clone()).unwrap_or_default();
-            if before != var.value {
+            if var_import_changes(current.as_ref(), var) {
+                let before = current.as_ref().map(|v| v.raw.clone()).unwrap_or_default();
                 if g.json {
                     dry_changes.push(serde_json::json!({
                         "scope": "user",
@@ -1126,6 +1208,9 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
                         "before": [before],
                         "after": [var.value],
                     }));
+                } else if before == var.value {
+                    let old = current.as_ref().map(|v| ty_name(v.ty.clone())).unwrap_or("(unset)".to_string());
+                    println!("~ {} (type {old} -> {})", var.name, ty_name(ty.clone()));
                 } else {
                     print_changes(
                         false,
@@ -1136,7 +1221,7 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
             }
             continue;
         }
-        if current.as_ref().map(|v| v.raw.as_str()) == Some(var.value.as_str()) {
+        if !var_import_changes(current.as_ref(), var) {
             continue;
         }
         planned += 1;
