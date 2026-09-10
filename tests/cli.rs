@@ -207,6 +207,81 @@ fn remove_missing_exits_4() {
 }
 
 #[test]
+fn remove_numeric_dir_name_prefers_path_over_index() {
+    let dir = setup("remove_numeric");
+    pathctl("remove_numeric", dir.path())
+        .arg("add")
+        .arg(r"C:\pathctl-num-a")
+        .assert()
+        .success();
+    // A directory literally named `123` must be removable by path even
+    // though it also parses as an index.
+    pathctl("remove_numeric", dir.path()).arg("add").arg("123").assert().success();
+    pathctl("remove_numeric", dir.path())
+        .arg("remove")
+        .arg("123")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed: 123"));
+    pathctl("remove_numeric", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r"C:\pathctl-num-a"))
+        .stdout(predicate::str::contains("123").not());
+}
+
+#[test]
+fn move_dry_run_reports_moved_entries() {
+    let dir = setup("move_dry");
+    pathctl("move_dry", dir.path()).arg("add").arg("a").assert().success();
+    pathctl("move_dry", dir.path()).arg("add").arg("b").assert().success();
+    pathctl("move_dry", dir.path())
+        .arg("move")
+        .arg("2")
+        .arg("1")
+        .arg("--dry-run")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains('~'));
+}
+
+#[test]
+fn import_restores_path_registry_type() {
+    let dir = setup("import_ty");
+    let entry = r"C:\pathctl-ty";
+    pathctl("import_ty", dir.path()).arg("add").arg(entry).assert().success();
+    let export_file = dir.path().join("ty.json");
+    pathctl("import_ty", dir.path())
+        .arg("export")
+        .arg("--output")
+        .arg(&export_file)
+        .assert()
+        .success();
+    let text = std::fs::read_to_string(&export_file).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    // Flip the exported PATH type (2 <-> 1) and reimport; the stored
+    // type must follow the file, not the pre-existing value.
+    let cur_ty = v["path"]["user"]["ty"].as_u64().unwrap();
+    let new_ty = if cur_ty == 2 { 1 } else { 2 };
+    v["path"]["user"]["ty"] = serde_json::json!(new_ty);
+    std::fs::write(&export_file, serde_json::to_string(&v).unwrap()).unwrap();
+    pathctl("import_ty", dir.path())
+        .arg("import")
+        .arg(&export_file)
+        .assert()
+        .success();
+    let out = pathctl("import_ty", dir.path())
+        .arg("export")
+        .output()
+        .unwrap();
+    let v2: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(v2["path"]["user"]["ty"].as_u64().unwrap(), new_ty);
+    assert!(v2["path"]["user"]["value"].as_str().unwrap().contains(entry));
+}
+
+#[test]
 fn dedupe_keeps_first_and_second_run_noops() {
     let dir = setup("dedupe");
     let entry = r"C:\pathctl-dedupe";

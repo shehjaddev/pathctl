@@ -237,4 +237,27 @@ mod tests {
         assert_eq!(d.len(), 2);
         assert!(diff_entries(&before, &before).is_empty());
     }
+
+    #[test]
+    fn diff_entries_reports_pure_reorder_as_moved() {
+        let before = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let after = vec!["c".to_string(), "a".to_string(), "b".to_string()];
+        let d = diff_entries(&before, &after);
+        assert!(!d.is_empty(), "reorder must not diff empty");
+        assert!(d.iter().all(|c| matches!(c, Change::Moved(_))));
+    }
+
+    #[test]
+    fn diff_entries_counts_duplicates() {
+        let before = vec!["a".to_string(), "a".to_string()];
+        let after = vec!["a".to_string()];
+        let d = diff_entries(&before, &after);
+        assert_eq!(d, vec![Change::Removed("a".to_string())]);
+    }
+
+    #[test]
+    fn eq_treats_slashes_as_equal() {
+        assert!(eq(r"C:/tools", r"C:\tools"));
+        assert!(eq(r"C:/", r"C:\"));
+    }
 }

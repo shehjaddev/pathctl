@@ -78,4 +78,14 @@ mod tests {
         unsafe { std::env::set_var("PATHCTL_EXPAND_TEST", r"C:\resolved") };
         assert_eq!(expand("%PATHCTL_EXPAND_TEST%"), r"C:\resolved");
     }
+
+    #[test]
+    fn has_var_ref_needs_a_pair() {
+        assert!(has_var_ref(r"%SystemRoot%\x"));
+        assert!(has_var_ref(r"%ProgramFiles(x86)%\x"));
+        assert!(!has_var_ref(r"C:\100%_coverage"));
+        assert!(!has_var_ref(r"C:\tools"));
+        assert!(!has_var_ref(r"C:\a%b\c"));
+        assert!(!has_var_ref("%%"));
+    }
 }
