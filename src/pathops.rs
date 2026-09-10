@@ -88,9 +88,17 @@ pub fn remove_index(entries: &mut Vec<String>, index: usize) -> Result<String, P
 
 /// Move the entry at 1-based `from` to 1-based `to`.
 pub fn reorder(entries: &mut Vec<String>, from: usize, to: usize) -> Result<(), PathOpsError> {
-    if from == 0 || from > entries.len() || to == 0 || to > entries.len() {
+    // Report the offending index, `from` first: `max(from, to)` could blame
+    // an in-range index (e.g. `move 0 1` reported index 1).
+    if from == 0 || from > entries.len() {
         return Err(PathOpsError::OutOfRange {
-            index: from.max(to),
+            index: from,
+            len: entries.len(),
+        });
+    }
+    if to == 0 || to > entries.len() {
+        return Err(PathOpsError::OutOfRange {
+            index: to,
             len: entries.len(),
         });
     }
@@ -225,6 +233,19 @@ mod tests {
         let mut v = vec!["a".to_string(), "b".to_string()];
         reorder(&mut v, 1, 1).unwrap();
         assert_eq!(v, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn reorder_reports_the_offending_index() {
+        let mut v = vec!["a".to_string()];
+        assert_eq!(
+            reorder(&mut v, 0, 1).unwrap_err(),
+            PathOpsError::OutOfRange { index: 0, len: 1 }
+        );
+        assert_eq!(
+            reorder(&mut v, 1, 2).unwrap_err(),
+            PathOpsError::OutOfRange { index: 2, len: 1 }
+        );
     }
 
     #[test]
