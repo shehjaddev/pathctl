@@ -149,17 +149,20 @@ fn confirm(g: &Global, action: &str) -> Result<()> {
 /// with `--elevate` the process relaunches via UAC. Anything else is a plain
 /// registry error (exit 5). Extracted from the write helpers so the exit-3
 /// contract is unit-testable (handoff #4).
+///
+/// Returns `Ok(true)` when the change was delegated to an elevated child
+/// (parent must not claim success); `Ok(false)` when written directly.
 fn write_error_to_app(
     g: &Global,
     scope: Scope,
     e: io::Error,
     elevate_msg: &str,
-) -> Result<()> {
+) -> Result<bool> {
     if scope == Scope::System && e.kind() == io::ErrorKind::PermissionDenied {
         if g.elevate {
             crate::elevate::relaunch_elevated()
                 .map_err(|e| AppError::Other(format!("elevation failed: {e}")))?;
-            Ok(())
+            Ok(true)
         } else {
             Err(AppError::ElevationRequired(elevate_msg.into()))
         }
@@ -169,15 +172,16 @@ fn write_error_to_app(
 }
 
 /// Write with elevation fallback for system scope (exit 3 / --elevate).
+/// Returns `true` if delegated to an elevated child.
 fn write_path_elev(
     reg: &Registry,
     g: &Global,
     scope: Scope,
     value: &str,
     ty: RegType,
-) -> Result<()> {
+) -> Result<bool> {
     match reg.write_path(scope, value, ty) {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(false),
         Err(e) => write_error_to_app(
             g,
             scope,
@@ -194,9 +198,9 @@ fn write_var_elev(
     name: &str,
     value: &str,
     ty: RegType,
-) -> Result<()> {
+) -> Result<bool> {
     match reg.write_var(scope, name, value, ty) {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(false),
         Err(e) => write_error_to_app(
             g,
             scope,
@@ -208,9 +212,10 @@ fn write_var_elev(
 
 /// Delete with the same elevation contract as writes: a system-scope
 /// `PermissionDenied` without `--elevate` is exit 3, not a raw registry error.
-fn delete_var_elev(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Result<()> {
+/// Returns `true` if delegated to an elevated child.
+fn delete_var_elev(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Result<bool> {
     match reg.delete_var(scope, name) {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(false),
         Err(e) => write_error_to_app(
             g,
             scope,
@@ -221,6 +226,10 @@ fn delete_var_elev(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Resu
 }
 
 /// The shared mutation tail: snapshot → write → broadcast.
+/// `before_ty` is the snapshotted (old) type; `write_ty` is the type to write
+/// (usually the same — type-preserving — except import, which restores the
+/// exported type).
+#[allow(clippy::too_many_arguments)]
 fn commit_path(
     reg: &Registry,
     g: &Global,
@@ -228,9 +237,10 @@ fn commit_path(
     before_raw: &str,
     before_ty: RegType,
     after_raw: &str,
+    write_ty: RegType,
     command: &str,
-) -> Result<()> {
-    if before_raw == after_raw {
+) -> Result<bool> {
+    if before_raw == after_raw && before_ty == write_ty {
         return Err(AppError::NoOp("PATH unchanged".into()));
     }
     guard_length("Path", after_raw)?;
@@ -241,24 +251,39 @@ fn commit_path(
         after_raw,
         command,
         Some(registry::reg_type_to_u32(before_ty.clone())),
-    ))?;
-    snapshot::prune()?;
-    if let Err(e) = write_path_elev(reg, g, scope, after_raw, before_ty) {
-        // The write failed (e.g. exit 3 without admin, or a registry error),
-        // so the just-saved snapshot claims a state that never happened.
-        // Best-effort remove it; otherwise `diff` would report false drift
-        // and `undo` would replay a no-op.
-        let _ = std::fs::remove_file(&snap_path);
-        return Err(e);
+    ))
+    .map_err(|e| AppError::Other(format!("snapshot failed: {e}")))?;
+    if let Err(e) = snapshot::prune() {
+        eprintln!("warning: snapshot prune failed: {e}");
+    }
+    match write_path_elev(reg, g, scope, after_raw, write_ty) {
+        Ok(false) => {},
+        Ok(true) => {
+            // Delegated to an elevated child: it will journal itself, so drop
+            // our premature snapshot to avoid a phantom entry if the child
+            // is cancelled or fails.
+            let _ = std::fs::remove_file(&snap_path);
+            eprintln!("relaunched elevated; verify with list/check (parent did not write)");
+            return Ok(true);
+        }
+        Err(e) => {
+            // The write failed (e.g. exit 3 without admin, or a registry error),
+            // so the just-saved snapshot claims a state that never happened.
+            // Best-effort remove it; otherwise `diff` would report false drift
+            // and `undo` would replay a no-op.
+            let _ = std::fs::remove_file(&snap_path);
+            return Err(e);
+        }
     }
     warn_long_path(after_raw);
     if !g.no_broadcast {
         notify::broadcast_environment();
     }
-    Ok(())
+    Ok(false)
 }
 
 /// Mutation tail for general env vars (set/delete).
+/// Returns `true` if delegated to an elevated child.
 fn commit_var(
     reg: &Registry,
     g: &Global,
@@ -267,7 +292,7 @@ fn commit_var(
     before: Option<&PathValue>,
     after: Option<(&str, RegType)>,
     command: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let before_raw = before.map(|v| v.raw.clone()).unwrap_or_default();
     let after_str = after.as_ref().map(|(v, _)| v.to_string());
     let after_raw = after_str.clone().unwrap_or_default();
@@ -287,22 +312,33 @@ fn commit_var(
         &after_raw,
         command,
         ty.map(registry::reg_type_to_u32),
-    ))?;
-    snapshot::prune()?;
+    ))
+    .map_err(|e| AppError::Other(format!("snapshot failed: {e}")))?;
+    if let Err(e) = snapshot::prune() {
+        eprintln!("warning: snapshot prune failed: {e}");
+    }
     let result = match &after {
         Some((value, t)) => write_var_elev(reg, g, scope, name, value, t.clone()),
         None => delete_var_elev(reg, g, scope, name),
     };
-    if let Err(e) = result {
-        // Same phantom-snapshot guard as commit_path: a failed write must not
-        // leave a journal entry claiming the new state exists.
-        let _ = std::fs::remove_file(&snap_path);
-        return Err(e);
+    match result {
+        Ok(false) => {},
+        Ok(true) => {
+            let _ = std::fs::remove_file(&snap_path);
+            eprintln!("relaunched elevated; verify with env get (parent did not write)");
+            return Ok(true);
+        }
+        Err(e) => {
+            // Same phantom-snapshot guard as commit_path: a failed write must not
+            // leave a journal entry claiming the new state exists.
+            let _ = std::fs::remove_file(&snap_path);
+            return Err(e);
+        }
     }
     if !g.no_broadcast {
         notify::broadcast_environment();
     }
-    Ok(())
+    Ok(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -501,7 +537,9 @@ pub fn add(
         return Ok(0);
     }
     confirm(g, &format!("add '{entry}' to PATH"))?;
-    commit_path(reg, g, scope, &before_raw, before_ty, &after_raw, &format!("add {entry}"))?;
+    if commit_path(reg, g, scope, &before_raw, before_ty.clone(), &after_raw, before_ty, &format!("add {entry}"))? {
+        return Ok(0);
+    }
     if !g.json {
         println!("added: {entry}");
     }
@@ -535,7 +573,9 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
         return Ok(0);
     }
     confirm(g, &format!("remove '{removed}' from PATH"))?;
-    commit_path(reg, g, scope, &before_raw, before_ty, &after_raw, &format!("remove {removed}"))?;
+    if commit_path(reg, g, scope, &before_raw, before_ty.clone(), &after_raw, before_ty, &format!("remove {removed}"))? {
+        return Ok(0);
+    }
     if !g.json {
         println!("removed: {removed}");
     }
@@ -555,7 +595,9 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         return Ok(0);
     }
     confirm(g, "dedupe PATH")?;
-    commit_path(reg, g, scope, &before_raw, before_ty, &after_raw, "dedupe")?;
+    if commit_path(reg, g, scope, &before_raw, before_ty.clone(), &after_raw, before_ty, "dedupe")? {
+        return Ok(0);
+    }
     if !g.json {
         println!(
             "deduped: removed {} duplicate(s)",
@@ -599,15 +641,18 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
             if removed.len() == 1 { "y" } else { "ies" }
         ),
     )?;
-    commit_path(
+    if commit_path(
         reg,
         g,
         scope,
         &before_raw,
-        before_ty,
+        before_ty.clone(),
         &after_raw,
+        before_ty,
         &format!("prune {}", removed.len()),
-    )?;
+    )? {
+        return Ok(0);
+    }
     if !g.json {
         for e in &removed {
             println!("- {e}");
@@ -641,7 +686,9 @@ pub fn move_entry(
         return Ok(0);
     }
     confirm(g, &format!("move entry {from} to position {to}"))?;
-    commit_path(reg, g, scope, &before_raw, before_ty, &after_raw, &format!("move {from} {to}"))?;
+    if commit_path(reg, g, scope, &before_raw, before_ty.clone(), &after_raw, before_ty, &format!("move {from} {to}"))? {
+        return Ok(0);
+    }
     if !g.json {
         println!("moved: {from} -> {to}");
     }
@@ -757,13 +804,20 @@ pub fn undo(
     confirm(g, &format!("undo '{}' ({})", target.command, target.ts))?;
     guard_length(&name, &restore_raw)?;
 
-    if name == "Path" {
-        write_path_elev(reg, g, scope, &restore_raw, ty)?;
-        warn_long_path(&restore_raw);
+    let delegated = if name == "Path" {
+        let d = write_path_elev(reg, g, scope, &restore_raw, ty)?;
+        if !d {
+            warn_long_path(&restore_raw);
+        }
+        d
     } else if restore_raw.is_empty() {
-        delete_var_elev(reg, g, scope, &name)?;
+        delete_var_elev(reg, g, scope, &name)?
     } else {
-        write_var_elev(reg, g, scope, &name, &restore_raw, ty)?;
+        write_var_elev(reg, g, scope, &name, &restore_raw, ty)?
+    };
+    if delegated {
+        eprintln!("relaunched elevated; verify with list/env get (parent did not write)");
+        return Ok(0);
     }
 
     // Snapshot the inverse AFTER the write succeeds so a failed restore
@@ -778,8 +832,11 @@ pub fn undo(
         &restore_raw,
         &format!("undo of {}", target.ts),
         current.as_ref().map(|v| registry::reg_type_to_u32(v.ty.clone())),
-    ))?;
-    snapshot::prune()?;
+    ))
+    .map_err(|e| AppError::Other(format!("snapshot failed: {e}")))?;
+    if let Err(e) = snapshot::prune() {
+        eprintln!("warning: snapshot prune failed: {e}");
+    }
     if !g.no_broadcast {
         notify::broadcast_environment();
     }
@@ -976,6 +1033,7 @@ struct ImportVars {
 #[derive(serde::Deserialize)]
 struct ImportValue {
     value: String,
+    ty: Option<u32>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1003,10 +1061,14 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
     // Dry-run JSON accumulates into one document; the per-item printer emits
     // one document per change, which would concatenate on stdout.
     let mut dry_changes: Vec<serde_json::Value> = Vec::new();
-    let mut apply_path = |scope: Scope, value: &ImportValue| -> Result<()> {
+    let mut apply_path = |scope: Scope, value: &ImportValue| -> Result<bool> {
         let (before_raw, before_ty) = current_path(reg, scope)?;
-        if before_raw == value.value {
-            return Ok(());
+        let write_ty = value
+            .ty
+            .map(registry::reg_type_from_u32)
+            .unwrap_or_else(|| before_ty.clone());
+        if before_raw == value.value && before_ty == write_ty {
+            return Ok(false);
         }
         if g.dry_run {
             if g.json {
@@ -1023,17 +1085,21 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
                     &pathops::parse(&value.value),
                 );
             }
-            return Ok(());
+            return Ok(false);
         }
         planned += 1;
-        commit_path(reg, g, scope, &before_raw, before_ty, &value.value, "import")
+        commit_path(reg, g, scope, &before_raw, before_ty, &value.value, write_ty, "import")
     };
 
-    if let Some(v) = &data.path.user {
-        apply_path(Scope::User, v)?;
+    if let Some(v) = &data.path.user
+        && apply_path(Scope::User, v)?
+    {
+        return Ok(0);
     }
-    if let Some(v) = &data.path.system {
-        apply_path(Scope::System, v)?;
+    if let Some(v) = &data.path.system
+        && apply_path(Scope::System, v)?
+    {
+        return Ok(0);
     }
     for var in &data.variables.user {
         // Skip entries export would never produce: the reserved `Path` name
@@ -1072,7 +1138,10 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
             continue;
         }
         planned += 1;
-        commit_var(reg, g, Scope::User, &var.name, current.as_ref(), Some((&var.value, ty)), "import")?;
+        // Delegation cannot happen for user scope, but propagate honestly.
+        if commit_var(reg, g, Scope::User, &var.name, current.as_ref(), Some((&var.value, ty)), "import")? {
+            return Ok(0);
+        }
     }
     if g.json && g.dry_run {
         println!("{}", serde_json::to_string(&dry_changes).expect("serialize"));
@@ -1134,7 +1203,9 @@ pub fn env_set(
         .as_ref()
         .map(|v| v.ty.clone())
         .unwrap_or_else(registry::default_var_type);
-    commit_var(reg, g, scope, name, current.as_ref(), Some((value, ty)), &format!("set {name}"))?;
+    if commit_var(reg, g, scope, name, current.as_ref(), Some((value, ty)), &format!("set {name}"))? {
+        return Ok(0);
+    }
     if !g.json {
         println!("set: {name}");
     }
@@ -1153,7 +1224,9 @@ pub fn env_delete(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Resul
         return Ok(0);
     }
     confirm(g, &format!("delete {name}"))?;
-    commit_var(reg, g, scope, name, current.as_ref(), None, &format!("delete {name}"))?;
+    if commit_var(reg, g, scope, name, current.as_ref(), None, &format!("delete {name}"))? {
+        return Ok(0);
+    }
     if !g.json {
         println!("deleted: {name}");
     }
@@ -1209,7 +1282,7 @@ mod tests {
         reg.write_var(Scope::User, "PATHCTL_DEL_TEST", "x", registry::default_var_type())
             .unwrap();
         let g = Global::default();
-        delete_var_elev(&reg, &g, Scope::User, "PATHCTL_DEL_TEST").unwrap();
+        assert!(!delete_var_elev(&reg, &g, Scope::User, "PATHCTL_DEL_TEST").unwrap());
         assert!(reg.read_var(Scope::User, "PATHCTL_DEL_TEST").unwrap().is_none());
     }
 
