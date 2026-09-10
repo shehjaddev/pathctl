@@ -28,9 +28,32 @@ fn cleanup(name: &str) {
     let _ = winreg::HKCU.delete_subkey_all(format!(r"Software\pathctl-test-{name}"));
 }
 
-fn setup(name: &str) -> tempfile::TempDir {
+/// Isolated test context: a temp snapshot dir plus a registry test key
+/// that is removed before *and* after the test (even on failure), so
+/// passing or failing runs never litter `HKCU\Software\pathctl-test-*`.
+struct TestCtx {
+    tmp: tempfile::TempDir,
+    name: String,
+}
+
+impl TestCtx {
+    fn path(&self) -> &Path {
+        self.tmp.path()
+    }
+}
+
+impl Drop for TestCtx {
+    fn drop(&mut self) {
+        cleanup(&self.name);
+    }
+}
+
+fn setup(name: &str) -> TestCtx {
     cleanup(name);
-    tempfile::tempdir().unwrap()
+    TestCtx {
+        tmp: tempfile::tempdir().unwrap(),
+        name: name.to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -598,11 +621,13 @@ fn import_ignores_reserved_path_variable() {
         "variables": { "user": [{ "name": "Path", "value": r"C:\evil", "ty": 2 }] },
     });
     std::fs::write(&f, serde_json::to_string(&rogue).unwrap()).unwrap();
+    // Nothing applicable changes (path.user already matches; the rogue
+    // `Path` variable is skipped), so import honestly reports no-op.
     pathctl("import_pathvar", dir.path())
         .arg("import")
         .arg(&f)
         .assert()
-        .success();
+        .code(4);
     pathctl("import_pathvar", dir.path())
         .arg("list")
         .arg("--raw")
@@ -929,6 +954,62 @@ fn import_rejects_bad_json() {
         .arg(&bad)
         .assert()
         .code(2);
+}
+
+#[test]
+fn import_with_nothing_to_do_exits_4_without_prompting() {
+    let dir = setup("import_noop");
+    let entry = r"C:\pathctl-inoop";
+    pathctl("import_noop", dir.path()).arg("add").arg(entry).assert().success();
+    let export_file = dir.path().join("noop.json");
+    pathctl("import_noop", dir.path())
+        .arg("export")
+        .arg("--output")
+        .arg(&export_file)
+        .assert()
+        .success();
+    // Reimporting the just-written state changes nothing: exit 4, and no
+    // confirmation prompt (would hang without -y; succeeds here either way
+    // but must not write or print completion).
+    pathctl("import_noop", dir.path())
+        .arg("import")
+        .arg(&export_file)
+        .assert()
+        .code(4);
+}
+
+#[test]
+fn list_raw_validates_resolved_entries() {
+    let dir = setup("list_raw_vars");
+    let existing = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    unsafe { std::env::set_var("PATHCTL_LIST_RAW_DIR", &existing) };
+    pathctl("list_raw_vars", dir.path())
+        .arg("add")
+        .arg("%PATHCTL_LIST_RAW_DIR%")
+        .assert()
+        .success();
+    // Resolvable entry: no missing/unresolvable flags even in --raw mode.
+    pathctl("list_raw_vars", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("%PATHCTL_LIST_RAW_DIR%"))
+        .stdout(predicate::str::contains('[').not());
+    pathctl("list_raw_vars", dir.path())
+        .arg("add")
+        .arg("%PATHCTL_DEFINITELY_UNRESOLVABLE_XYZ%")
+        .assert()
+        .success();
+    pathctl("list_raw_vars", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[%!]"));
 }
 
 #[test]
