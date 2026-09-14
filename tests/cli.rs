@@ -128,8 +128,7 @@ fn check_flags_missing_directory_exit_1() {
     let dir = setup("check_missing");
     let missing = r"C:\pathctl-definitely-missing-xyz";
     pathctl("check_missing", dir.path())
-        .arg("add")
-        .arg(missing)
+        .args(["add", missing])
         .assert()
         .success();
     pathctl("check_missing", dir.path())
@@ -148,14 +147,12 @@ fn add_then_list_shows_entry() {
     let dir = setup("add_list");
     let entry = r"C:\pathctl-test-bin";
     pathctl("add_list", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success()
         .stdout(predicate::str::contains("added"));
     pathctl("add_list", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout(predicate::str::contains(entry));
@@ -167,19 +164,15 @@ fn add_prepend_puts_entry_first() {
     let a = r"C:\pathctl-p-a";
     let b = r"C:\pathctl-p-b";
     pathctl("add_prepend", dir.path())
-        .arg("add")
-        .arg(a)
+        .args(["add", a])
         .assert()
         .success();
     pathctl("add_prepend", dir.path())
-        .arg("add")
-        .arg(b)
-        .arg("--prepend")
+        .args(["add", b, "--prepend"])
         .assert()
         .success();
     let out = pathctl("add_prepend", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .output()
         .unwrap();
     let text = stdout(&out);
@@ -193,14 +186,11 @@ fn add_dedupe_noop_exits_4() {
     let dir = setup("add_dedupe_noop");
     let entry = r"C:\pathctl-dd";
     pathctl("add_dedupe_noop", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     pathctl("add_dedupe_noop", dir.path())
-        .arg("add")
-        .arg(entry)
-        .arg("--dedupe")
+        .args(["add", entry, "--dedupe"])
         .assert()
         .code(4);
 }
@@ -210,13 +200,11 @@ fn add_duplicate_without_dedupe_is_allowed() {
     let dir = setup("add_dup_allowed");
     let entry = r"C:\pathctl-dup";
     pathctl("add_dup_allowed", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     pathctl("add_dup_allowed", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     pathctl("add_dup_allowed", dir.path())
@@ -231,15 +219,12 @@ fn dry_run_writes_nothing() {
     let dir = setup("dry_run");
     let entry = r"C:\pathctl-dry";
     pathctl("dry_run", dir.path())
-        .arg("add")
-        .arg(entry)
-        .arg("--dry-run")
+        .args(["add", entry, "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::contains('+'));
     pathctl("dry_run", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout(predicate::str::contains(entry).not());
@@ -251,31 +236,26 @@ fn remove_by_path_and_by_index() {
     let a = r"C:\pathctl-rm-a";
     let b = r"C:\pathctl-rm-b";
     pathctl("remove", dir.path())
-        .arg("add")
-        .arg(a)
+        .args(["add", a])
         .assert()
         .success();
     pathctl("remove", dir.path())
-        .arg("add")
-        .arg(b)
+        .args(["add", b])
         .assert()
         .success();
     // by path
     pathctl("remove", dir.path())
-        .arg("remove")
-        .arg(a)
+        .args(["remove", a])
         .assert()
         .success()
         .stdout(predicate::str::contains("removed"));
     // by #index
     pathctl("remove", dir.path())
-        .arg("remove")
-        .arg("#1")
+        .args(["remove", "#1"])
         .assert()
         .success();
     pathctl("remove", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout("");
@@ -285,8 +265,7 @@ fn remove_by_path_and_by_index() {
 fn remove_missing_exits_4() {
     let dir = setup("remove_missing");
     pathctl("remove_missing", dir.path())
-        .arg("remove")
-        .arg(r"C:\pathctl-not-there")
+        .args(["remove", r"C:\pathctl-not-there"])
         .assert()
         .code(4);
 }
@@ -295,26 +274,22 @@ fn remove_missing_exits_4() {
 fn remove_numeric_dir_name_prefers_path_over_index() {
     let dir = setup("remove_numeric");
     pathctl("remove_numeric", dir.path())
-        .arg("add")
-        .arg(r"C:\pathctl-num-a")
+        .args(["add", r"C:\pathctl-num-a"])
         .assert()
         .success();
     // A directory literally named `123` must be removable by path even
     // though it also parses as an index.
     pathctl("remove_numeric", dir.path())
-        .arg("add")
-        .arg("123")
+        .args(["add", "123"])
         .assert()
         .success();
     pathctl("remove_numeric", dir.path())
-        .arg("remove")
-        .arg("123")
+        .args(["remove", "123"])
         .assert()
         .success()
         .stdout(predicate::str::contains("removed: 123"));
     pathctl("remove_numeric", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout(predicate::str::contains(r"C:\pathctl-num-a"))
@@ -325,20 +300,15 @@ fn remove_numeric_dir_name_prefers_path_over_index() {
 fn move_dry_run_reports_moved_entries() {
     let dir = setup("move_dry");
     pathctl("move_dry", dir.path())
-        .arg("add")
-        .arg("a")
+        .args(["add", "a"])
         .assert()
         .success();
     pathctl("move_dry", dir.path())
-        .arg("add")
-        .arg("b")
+        .args(["add", "b"])
         .assert()
         .success();
     pathctl("move_dry", dir.path())
-        .arg("move")
-        .arg("2")
-        .arg("1")
-        .arg("--dry-run")
+        .args(["move", "2", "1", "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::contains('~'));
@@ -349,8 +319,7 @@ fn import_restores_path_registry_type() {
     let dir = setup("import_ty");
     let entry = r"C:\pathctl-ty";
     pathctl("import_ty", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     let export_file = dir.path().join("ty.json");
@@ -392,13 +361,11 @@ fn dedupe_keeps_first_and_second_run_noops() {
     let dir = setup("dedupe");
     let entry = r"C:\pathctl-dedupe";
     pathctl("dedupe", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     pathctl("dedupe", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     pathctl("dedupe", dir.path())
@@ -408,8 +375,7 @@ fn dedupe_keeps_first_and_second_run_noops() {
         .stdout(predicate::str::contains("1 duplicate"));
     pathctl("dedupe", dir.path()).arg("dedupe").assert().code(4);
     let out = pathctl("dedupe", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .output()
         .unwrap();
     assert_eq!(stdout(&out).matches(entry).count(), 1, "entry appears once");
@@ -421,32 +387,25 @@ fn move_reorders_entries() {
     let a = r"C:\pathctl-mv-a";
     let b = r"C:\pathctl-mv-b";
     pathctl("move", dir.path())
-        .arg("add")
-        .arg(a)
+        .args(["add", a])
         .assert()
         .success();
     pathctl("move", dir.path())
-        .arg("add")
-        .arg(b)
+        .args(["add", b])
         .assert()
         .success();
     pathctl("move", dir.path())
-        .arg("move")
-        .arg("2")
-        .arg("1")
+        .args(["move", "2", "1"])
         .assert()
         .success();
     let out = pathctl("move", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .output()
         .unwrap();
     let text = stdout(&out);
     assert!(text.find(b).unwrap() < text.find(a).unwrap());
     pathctl("move", dir.path())
-        .arg("move")
-        .arg("0")
-        .arg("1")
+        .args(["move", "0", "1"])
         .assert()
         .code(2);
 }
@@ -460,8 +419,7 @@ fn prune_removes_missing_keeps_existing() {
         .to_string_lossy()
         .into_owned();
     pathctl("prune", dir.path())
-        .arg("add")
-        .arg(missing)
+        .args(["add", missing])
         .assert()
         .success();
     pathctl("prune", dir.path())
@@ -475,8 +433,7 @@ fn prune_removes_missing_keeps_existing() {
         .success()
         .stdout(predicate::str::contains("pruned: 1 missing"));
     let out = pathctl("prune", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .output()
         .unwrap();
     let text = stdout(&out);
@@ -490,19 +447,16 @@ fn prune_dry_run_writes_nothing() {
     let dir = setup("prune_dry");
     let missing = r"C:\pathctl-prune-dry-missing";
     pathctl("prune_dry", dir.path())
-        .arg("add")
-        .arg(missing)
+        .args(["add", missing])
         .assert()
         .success();
     pathctl("prune_dry", dir.path())
-        .arg("prune")
-        .arg("--dry-run")
+        .args(["prune", "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::contains('-'));
     pathctl("prune_dry", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout(predicate::str::contains(missing));
@@ -541,8 +495,7 @@ fn prune_keeps_quoted_entries_for_existing_directories() {
         .assert()
         .success();
     let out = pathctl("prune_quoted", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .output()
         .unwrap();
     let text = stdout(&out);
@@ -565,8 +518,7 @@ fn undo_restores_and_is_itself_undoable() {
     let dir = setup("undo");
     let entry = r"C:\pathctl-undo";
     pathctl("undo", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     pathctl("undo", dir.path())
@@ -575,16 +527,14 @@ fn undo_restores_and_is_itself_undoable() {
         .success()
         .stdout(predicate::str::contains("restored"));
     pathctl("undo", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout(predicate::str::contains(entry).not());
     // undo of the undo brings it back
     pathctl("undo", dir.path()).arg("undo").assert().success();
     pathctl("undo", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout(predicate::str::contains(entry));
@@ -595,8 +545,7 @@ fn undo_restores_an_absent_path_as_absent() {
     let dir = setup("undo_absent");
     // The test key starts with no Path value at all.
     pathctl("undo_absent", dir.path())
-        .arg("add")
-        .arg(r"C:\pathctl-ua")
+        .args(["add", r"C:\pathctl-ua"])
         .assert()
         .success();
     pathctl("undo_absent", dir.path())
@@ -615,9 +564,7 @@ fn undo_restores_an_absent_path_as_absent() {
         v["path"]["user"]
     );
     pathctl("undo_absent", dir.path())
-        .arg("env")
-        .arg("get")
-        .arg("Path")
+        .args(["env", "get", "Path"])
         .assert()
         .code(4);
 }
@@ -628,25 +575,20 @@ fn undo_to_specific_snapshot() {
     let a = r"C:\pathctl-uto-a";
     let b = r"C:\pathctl-uto-b";
     pathctl("undo_to", dir.path())
-        .arg("add")
-        .arg(a)
+        .args(["add", a])
         .assert()
         .success();
     pathctl("undo_to", dir.path())
-        .arg("add")
-        .arg(b)
+        .args(["add", b])
         .assert()
         .success();
     // snapshot 1 = "" -> a ; snapshot 2 = "a" -> "a;b"
     pathctl("undo_to", dir.path())
-        .arg("undo")
-        .arg("--to")
-        .arg("1")
+        .args(["undo", "--to", "1"])
         .assert()
         .success();
     pathctl("undo_to", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout("");
@@ -666,58 +608,42 @@ fn undo_kind_filter_selects_domain() {
     let dir = setup("undo_kind");
     let entry = r"C:\pathctl-uk";
     pathctl("undo_kind", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     pathctl("undo_kind", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg("PATHCTL_UK_FLAG")
-        .arg("1")
+        .args(["env", "set", "PATHCTL_UK_FLAG", "1"])
         .assert()
         .success();
     pathctl("undo_kind", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg("PATHCTL_UK_FLAG")
-        .arg("2")
+        .args(["env", "set", "PATHCTL_UK_FLAG", "2"])
         .assert()
         .success();
     // Newest snapshot is the env var; --kind path must skip it and undo the add.
     pathctl("undo_kind", dir.path())
-        .arg("undo")
-        .arg("--kind")
-        .arg("path")
+        .args(["undo", "--kind", "path"])
         .assert()
         .success()
         .stdout(predicate::str::contains("restored Path"));
     pathctl("undo_kind", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout(predicate::str::contains(entry).not());
     // The env var was untouched by the path undo.
     pathctl("undo_kind", dir.path())
-        .arg("env")
-        .arg("get")
-        .arg("PATHCTL_UK_FLAG")
+        .args(["env", "get", "PATHCTL_UK_FLAG"])
         .assert()
         .success()
         .stdout("2\n");
     // --kind env targets the env snapshots only.
     pathctl("undo_kind", dir.path())
-        .arg("undo")
-        .arg("--kind")
-        .arg("env")
+        .args(["undo", "--kind", "env"])
         .assert()
         .success()
         .stdout(predicate::str::contains("restored PATHCTL_UK_FLAG"));
     pathctl("undo_kind", dir.path())
-        .arg("env")
-        .arg("get")
-        .arg("PATHCTL_UK_FLAG")
+        .args(["env", "get", "PATHCTL_UK_FLAG"])
         .assert()
         .success()
         .stdout("1\n");
@@ -727,9 +653,7 @@ fn undo_kind_filter_selects_domain() {
 fn undo_kind_bogus_value_exits_2() {
     let dir = setup("undo_kind_bad");
     pathctl("undo_kind_bad", dir.path())
-        .arg("undo")
-        .arg("--kind")
-        .arg("bogus")
+        .args(["undo", "--kind", "bogus"])
         .assert()
         .code(2);
 }
@@ -738,15 +662,12 @@ fn undo_kind_bogus_value_exits_2() {
 fn undo_to_zero_exits_2() {
     let dir = setup("undo_zero");
     pathctl("undo_zero", dir.path())
-        .arg("add")
-        .arg(r"C:\pathctl-uz")
+        .args(["add", r"C:\pathctl-uz"])
         .assert()
         .success();
     // `--to 0` used to underflow (panic in debug builds); must be a usage error.
     pathctl("undo_zero", dir.path())
-        .arg("undo")
-        .arg("--to")
-        .arg("0")
+        .args(["undo", "--to", "0"])
         .assert()
         .code(2);
 }
@@ -778,15 +699,12 @@ fn read_commands_do_not_create_the_key() {
 fn diff_to_out_of_range_exits_2() {
     let dir = setup("diff_range");
     pathctl("diff_range", dir.path())
-        .arg("add")
-        .arg(r"C:\pathctl-dr")
+        .args(["add", r"C:\pathctl-dr"])
         .assert()
         .success();
     // Used to silently diff against an empty base (false drift, exit 1).
     pathctl("diff_range", dir.path())
-        .arg("diff")
-        .arg("--to")
-        .arg("99")
+        .args(["diff", "--to", "99"])
         .assert()
         .code(2);
 }
@@ -795,15 +713,11 @@ fn diff_to_out_of_range_exits_2() {
 fn diff_scope_all_json_parses_as_one_document() {
     let dir = setup("diff_json");
     pathctl("diff_json", dir.path())
-        .arg("add")
-        .arg(r"C:\pathctl-dj")
+        .args(["add", r"C:\pathctl-dj"])
         .assert()
         .success();
     let out = pathctl("diff_json", dir.path())
-        .arg("diff")
-        .arg("--scope")
-        .arg("all")
-        .arg("--json")
+        .args(["diff", "--scope", "all", "--json"])
         .output()
         .unwrap();
     // Was two concatenated JSON objects; must be a single parseable document.
@@ -817,8 +731,7 @@ fn import_ignores_reserved_path_variable() {
     let dir = setup("import_pathvar");
     let entry = r"C:\pathctl-ipv";
     pathctl("import_pathvar", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     // Hand-crafted file with a rogue `Path` entry in variables.user that would
@@ -839,8 +752,7 @@ fn import_ignores_reserved_path_variable() {
         .assert()
         .code(4);
     pathctl("import_pathvar", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout(predicate::str::contains(entry))
@@ -852,8 +764,7 @@ fn diff_tracks_external_drift_and_clears_after_undo() {
     let dir = setup("diff");
     let entry = r"C:\pathctl-diff";
     pathctl("diff", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     // recorded state matches current -> clean
@@ -879,17 +790,14 @@ fn non_string_values_are_left_alone() {
     // corrupt it (and an earlier version did exactly that).
     let binary = [0x61u8, 0x00, 0x62, 0x00, 0x63];
     pathctl("nonstring", dir.path())
-        .arg("add")
-        .arg(r"C:\pathctl-ns")
+        .args(["add", r"C:\pathctl-ns"])
         .assert()
         .success();
     let key = test_key("nonstring");
     write_raw(&key, "PATHCTL_BIN", &binary, winreg::enums::REG_BINARY);
 
     pathctl("nonstring", dir.path())
-        .arg("env")
-        .arg("get")
-        .arg("PATHCTL_BIN")
+        .args(["env", "get", "PATHCTL_BIN"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("REG_BINARY"));
@@ -928,9 +836,7 @@ fn non_string_values_are_left_alone() {
         .code(2)
         .stderr(predicate::str::contains("REG_BINARY"));
     pathctl("nonstring", dir.path())
-        .arg("env")
-        .arg("get")
-        .arg("PATHCTL_BIN2")
+        .args(["env", "get", "PATHCTL_BIN2"])
         .assert()
         .code(4);
 
@@ -949,37 +855,25 @@ fn env_set_get_delete_roundtrip() {
     let dir = setup("env");
     let name = "PATHCTL_TEST_VAR";
     pathctl("env", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg(name)
-        .arg("hello world")
+        .args(["env", "set", name, "hello world"])
         .assert()
         .success();
     pathctl("env", dir.path())
-        .arg("env")
-        .arg("get")
-        .arg(name)
+        .args(["env", "get", name])
         .assert()
         .success()
         .stdout("hello world\n");
     // idempotent set -> no-op
     pathctl("env", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg(name)
-        .arg("hello world")
+        .args(["env", "set", name, "hello world"])
         .assert()
         .code(4);
     pathctl("env", dir.path())
-        .arg("env")
-        .arg("delete")
-        .arg(name)
+        .args(["env", "delete", name])
         .assert()
         .success();
     pathctl("env", dir.path())
-        .arg("env")
-        .arg("get")
-        .arg(name)
+        .args(["env", "get", name])
         .assert()
         .code(4);
 }
@@ -989,17 +883,11 @@ fn env_set_is_undoable() {
     let dir = setup("env_undo");
     let name = "PATHCTL_TEST_VAR2";
     pathctl("env_undo", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg(name)
-        .arg("v1")
+        .args(["env", "set", name, "v1"])
         .assert()
         .success();
     pathctl("env_undo", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg(name)
-        .arg("v2")
+        .args(["env", "set", name, "v2"])
         .assert()
         .success();
     pathctl("env_undo", dir.path())
@@ -1007,9 +895,7 @@ fn env_set_is_undoable() {
         .assert()
         .success();
     pathctl("env_undo", dir.path())
-        .arg("env")
-        .arg("get")
-        .arg(name)
+        .args(["env", "get", name])
         .assert()
         .success()
         .stdout("v1\n");
@@ -1034,9 +920,7 @@ fn guard_refuses_oversized_value_on_import() {
         .stderr(predicate::str::contains("limit"));
     // nothing may have been written
     pathctl("guard", dir.path())
-        .arg("env")
-        .arg("get")
-        .arg("PATHCTL_BIG_VAR")
+        .args(["env", "get", "PATHCTL_BIG_VAR"])
         .assert()
         .code(4);
 }
@@ -1049,10 +933,7 @@ fn guard_refuses_oversized_value_on_import() {
 fn mutating_all_scope_is_rejected() {
     let dir = setup("scope_all");
     pathctl("scope_all", dir.path())
-        .arg("add")
-        .arg(r"C:\x")
-        .arg("--scope")
-        .arg("all")
+        .args(["add", r"C:\x", "--scope", "all"])
         .assert()
         .code(2);
 }
@@ -1061,9 +942,7 @@ fn mutating_all_scope_is_rejected() {
 fn unknown_scope_is_rejected() {
     let dir = setup("scope_bad");
     pathctl("scope_bad", dir.path())
-        .arg("list")
-        .arg("--scope")
-        .arg("bogus")
+        .args(["list", "--scope", "bogus"])
         .assert()
         .code(2);
 }
@@ -1073,13 +952,11 @@ fn json_output_parses() {
     let dir = setup("json");
     let entry = r"C:\pathctl-json";
     pathctl("json", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     let out = pathctl("json", dir.path())
-        .arg("list")
-        .arg("--json")
+        .args(["list", "--json"])
         .output()
         .unwrap();
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON");
@@ -1093,44 +970,31 @@ fn env_refuses_to_set_or_delete_the_path_variable() {
     let dir = setup("env_path");
     let entry = r"C:\pathctl-envpath";
     pathctl("env_path", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     // PATH is a path-command concern: writing it as an opaque variable would
     // replace the whole value (and delete would remove it outright).
     pathctl("env_path", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg("Path")
-        .arg(r"C:\only")
+        .args(["env", "set", "Path", r"C:\only"])
         .assert()
         .code(2);
     pathctl("env_path", dir.path())
-        .arg("env")
-        .arg("delete")
-        .arg("path")
+        .args(["env", "delete", "path"])
         .assert()
         .code(2);
     pathctl("env_path", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg("Path")
-        .arg(r"C:\only")
-        .arg("--dry-run")
+        .args(["env", "set", "Path", r"C:\only", "--dry-run"])
         .assert()
         .code(2);
     // PATH is untouched, and reading it as a variable still works.
     pathctl("env_path", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout(predicate::str::contains(entry));
     pathctl("env_path", dir.path())
-        .arg("env")
-        .arg("get")
-        .arg("Path")
+        .args(["env", "get", "Path"])
         .assert()
         .success()
         .stdout(predicate::str::contains(entry));
@@ -1142,18 +1006,15 @@ fn check_json_reports_structured_findings() {
     let missing = r"C:\pathctl-check-json-missing";
     // One entry twice: reported as a duplicate and as a missing directory.
     pathctl("check_json", dir.path())
-        .arg("add")
-        .arg(missing)
+        .args(["add", missing])
         .assert()
         .success();
     pathctl("check_json", dir.path())
-        .arg("add")
-        .arg(missing)
+        .args(["add", missing])
         .assert()
         .success();
     let out = pathctl("check_json", dir.path())
-        .arg("check")
-        .arg("--json")
+        .args(["check", "--json"])
         .output()
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("check --json document");
@@ -1161,22 +1022,21 @@ fn check_json_reports_structured_findings() {
     let findings = v["findings"].as_array().expect("findings array");
     // Findings are tagged data, not formatted sentences.
     assert!(
-        findings.iter().any(|f| {
-            f["kind"] == "duplicate" && f["scope"] == "user" && f["entry"] == missing
-        }),
+        findings
+            .iter()
+            .any(|f| { f["kind"] == "duplicate" && f["scope"] == "user" && f["entry"] == missing }),
         "expected a duplicate finding, got {findings:?}"
     );
     assert!(
-        findings.iter().any(|f| {
-            f["kind"] == "missing" && f["scope"] == "user" && f["entry"] == missing
-        }),
+        findings
+            .iter()
+            .any(|f| { f["kind"] == "missing" && f["scope"] == "user" && f["entry"] == missing }),
         "expected a missing finding, got {findings:?}"
     );
     // A clean PATH reports ok with no findings at all.
     let dir = setup("check_json_clean");
     let out = pathctl("check_json_clean", dir.path())
-        .arg("check")
-        .arg("--json")
+        .args(["check", "--json"])
         .output()
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("check --json document");
@@ -1213,8 +1073,7 @@ fn completions_generate_for_each_shell() {
     let dir = setup("completions");
     for shell in ["bash", "elvish", "fish", "powershell", "zsh"] {
         let out = pathctl("completions", dir.path())
-            .arg("completions")
-            .arg(shell)
+            .args(["completions", shell])
             .output()
             .unwrap();
         assert!(out.status.success(), "{shell} completions must succeed");
@@ -1237,15 +1096,11 @@ fn export_import_roundtrip() {
     let name = "PATHCTL_EXPORT_VAR";
     let entry = r"C:\pathctl-export";
     pathctl("export", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     pathctl("export", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg(name)
-        .arg("exported-value")
+        .args(["env", "set", name, "exported-value"])
         .assert()
         .success();
     let export_file = dir.path().join("backup.json");
@@ -1258,14 +1113,11 @@ fn export_import_roundtrip() {
 
     // mutate state away
     pathctl("export", dir.path())
-        .arg("remove")
-        .arg(entry)
+        .args(["remove", entry])
         .assert()
         .success();
     pathctl("export", dir.path())
-        .arg("env")
-        .arg("delete")
-        .arg(name)
+        .args(["env", "delete", name])
         .assert()
         .success();
 
@@ -1276,15 +1128,12 @@ fn export_import_roundtrip() {
         .assert()
         .success();
     pathctl("export", dir.path())
-        .arg("env")
-        .arg("get")
-        .arg(name)
+        .args(["env", "get", name])
         .assert()
         .success()
         .stdout("exported-value\n");
     pathctl("export", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout(predicate::str::contains(entry));
@@ -1316,9 +1165,7 @@ fn import_refuses_files_from_another_tool_or_newer_format() {
     }
     // Neither file was applied.
     pathctl("import_origin", dir.path())
-        .arg("env")
-        .arg("get")
-        .arg("PATHCTL_ORIGIN")
+        .args(["env", "get", "PATHCTL_ORIGIN"])
         .assert()
         .code(4);
 }
@@ -1328,15 +1175,11 @@ fn export_excludes_path_from_variables() {
     let dir = setup("export_dedupe");
     let entry = r"C:\pathctl-ed";
     pathctl("export_dedupe", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     pathctl("export_dedupe", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg("PATHCTL_ED_VAR")
-        .arg("v")
+        .args(["env", "set", "PATHCTL_ED_VAR", "v"])
         .assert()
         .success();
     let out = pathctl("export_dedupe", dir.path())
@@ -1363,8 +1206,7 @@ fn export_to_a_file_is_atomic() {
     let dir = setup("export_atomic");
     let entry = r"C:\pathctl-ea";
     pathctl("export_atomic", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     let out_file = dir.path().join("backup.json");
@@ -1393,9 +1235,7 @@ fn export_to_a_file_is_atomic() {
 fn export_refuses_non_windows_output_path() {
     let dir = setup("export_posix");
     pathctl("export_posix", dir.path())
-        .arg("export")
-        .arg("--output")
-        .arg("/tmp/export.json")
+        .args(["export", "--output", "/tmp/export.json"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("non-Windows"));
@@ -1408,9 +1248,7 @@ fn mutations_report_json() {
     // Every mutating command answers --json with one parseable document; the
     // non-JSON path is unaffected.
     let out = pathctl("json_mut", dir.path())
-        .arg("add")
-        .arg(entry)
-        .arg("--json")
+        .args(["add", entry, "--json"])
         .output()
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("add --json document");
@@ -1421,11 +1259,7 @@ fn mutations_report_json() {
     assert_eq!(v["changes"][0]["added"], entry);
 
     let out = pathctl("json_mut", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg("PATHCTL_JSONMUT")
-        .arg("v")
-        .arg("--json")
+        .args(["env", "set", "PATHCTL_JSONMUT", "v", "--json"])
         .output()
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("env set --json");
@@ -1434,8 +1268,7 @@ fn mutations_report_json() {
     assert_eq!(v["after"][0], "v");
 
     let out = pathctl("json_mut", dir.path())
-        .arg("undo")
-        .arg("--json")
+        .args(["undo", "--json"])
         .output()
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("undo --json");
@@ -1461,8 +1294,7 @@ fn mutations_report_json() {
     assert_eq!(v["changes"][0]["name"], "PATHCTL_JSONIMP");
 
     pathctl("json_mut", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success()
         .stdout(predicate::str::contains("added"));
@@ -1496,9 +1328,7 @@ fn dry_run_exits_zero_even_when_nothing_would_change() {
         .assert()
         .code(4);
     pathctl("dry_noop", dir.path())
-        .arg("move")
-        .arg("1")
-        .arg("1")
+        .args(["move", "1", "1"])
         .assert()
         .code(4);
     // ... but a dry run is a preview and always exits 0.
@@ -1510,26 +1340,19 @@ fn dry_run_exits_zero_even_when_nothing_would_change() {
         .assert()
         .code(0);
     pathctl("dry_noop", dir.path())
-        .arg("dedupe")
-        .arg("--dry-run")
+        .args(["dedupe", "--dry-run"])
         .assert()
         .code(0);
     pathctl("dry_noop", dir.path())
-        .arg("prune")
-        .arg("--dry-run")
+        .args(["prune", "--dry-run"])
         .assert()
         .code(0);
     pathctl("dry_noop", dir.path())
-        .arg("move")
-        .arg("1")
-        .arg("1")
-        .arg("--dry-run")
+        .args(["move", "1", "1", "--dry-run"])
         .assert()
         .code(0);
     pathctl("dry_noop", dir.path())
-        .arg("remove")
-        .arg(r"C:\pathctl-not-in-path")
-        .arg("--dry-run")
+        .args(["remove", r"C:\pathctl-not-in-path", "--dry-run"])
         .assert()
         .code(0);
 }
@@ -1543,37 +1366,23 @@ fn dry_run_exits_zero_for_env_history_and_import() {
         .assert()
         .code(4);
     pathctl("dry_noop2", dir.path())
-        .arg("undo")
-        .arg("--dry-run")
+        .args(["undo", "--dry-run"])
         .assert()
         .code(0);
     pathctl("dry_noop2", dir.path())
-        .arg("env")
-        .arg("delete")
-        .arg("PATHCTL_NOT_SET")
-        .arg("--dry-run")
+        .args(["env", "delete", "PATHCTL_NOT_SET", "--dry-run"])
         .assert()
         .code(0);
     pathctl("dry_noop2", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg("PATHCTL_DRY")
-        .arg("v")
+        .args(["env", "set", "PATHCTL_DRY", "v"])
         .assert()
         .success();
     pathctl("dry_noop2", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg("PATHCTL_DRY")
-        .arg("v")
+        .args(["env", "set", "PATHCTL_DRY", "v"])
         .assert()
         .code(4);
     pathctl("dry_noop2", dir.path())
-        .arg("env")
-        .arg("set")
-        .arg("PATHCTL_DRY")
-        .arg("v")
-        .arg("--dry-run")
+        .args(["env", "set", "PATHCTL_DRY", "v", "--dry-run"])
         .assert()
         .code(0);
     // An import with nothing to change.
@@ -1601,8 +1410,7 @@ fn backup_scope_is_honoured() {
     let dir = setup("backup_scope");
     let entry = r"C:\pathctl-bscope";
     pathctl("backup_scope", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     // Default: both halves, as documented.
@@ -1614,9 +1422,7 @@ fn backup_scope_is_honoured() {
     assert!(v["path"]["user"]["value"].as_str().unwrap().contains(entry));
     // `--scope system` must leave the user half out (it used to be ignored).
     let out = pathctl("backup_scope", dir.path())
-        .arg("export")
-        .arg("--scope")
-        .arg("system")
+        .args(["export", "--scope", "system"])
         .output()
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("export JSON");
@@ -1643,14 +1449,11 @@ fn backup_scope_is_honoured() {
         .assert()
         .code(4);
     pathctl("backup_scope", dir.path())
-        .arg("env")
-        .arg("get")
-        .arg("PATHCTL_BSCOPE")
+        .args(["env", "get", "PATHCTL_BSCOPE"])
         .assert()
         .code(4);
     let out = pathctl("backup_scope", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .output()
         .unwrap();
     assert!(
@@ -1660,9 +1463,7 @@ fn backup_scope_is_honoured() {
 
     // An unknown scope is rejected here like everywhere else.
     pathctl("backup_scope", dir.path())
-        .arg("export")
-        .arg("--scope")
-        .arg("bogus")
+        .args(["export", "--scope", "bogus"])
         .assert()
         .code(2);
 }
@@ -1684,8 +1485,7 @@ fn import_with_nothing_to_do_exits_4_without_prompting() {
     let dir = setup("import_noop");
     let entry = r"C:\pathctl-inoop";
     pathctl("import_noop", dir.path())
-        .arg("add")
-        .arg(entry)
+        .args(["add", entry])
         .assert()
         .success();
     let export_file = dir.path().join("noop.json");
@@ -1714,26 +1514,22 @@ fn list_raw_validates_resolved_entries() {
         .into_owned();
     unsafe { std::env::set_var("PATHCTL_LIST_RAW_DIR", &existing) };
     pathctl("list_raw_vars", dir.path())
-        .arg("add")
-        .arg("%PATHCTL_LIST_RAW_DIR%")
+        .args(["add", "%PATHCTL_LIST_RAW_DIR%"])
         .assert()
         .success();
     // Resolvable entry: no missing/unresolvable flags even in --raw mode.
     pathctl("list_raw_vars", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout(predicate::str::contains("%PATHCTL_LIST_RAW_DIR%"))
         .stdout(predicate::str::contains('[').not());
     pathctl("list_raw_vars", dir.path())
-        .arg("add")
-        .arg("%PATHCTL_DEFINITELY_UNRESOLVABLE_XYZ%")
+        .args(["add", "%PATHCTL_DEFINITELY_UNRESOLVABLE_XYZ%"])
         .assert()
         .success();
     pathctl("list_raw_vars", dir.path())
-        .arg("list")
-        .arg("--raw")
+        .args(["list", "--raw"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[%!]"));
@@ -1747,7 +1543,7 @@ fn gated_cmd(snap: &Path, scope: Option<&str>) -> Command {
         .arg("--no-broadcast")
         .arg("-y");
     if let Some(scope) = scope {
-        cmd.arg("--scope").arg(scope);
+        cmd.args(["--scope", scope]);
     }
     cmd
 }
