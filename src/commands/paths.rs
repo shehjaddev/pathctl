@@ -31,7 +31,16 @@ pub fn add(
         return Ok(0);
     }
     confirm(g, &format!("add '{entry}' to PATH"))?;
-    if commit_path(reg, g, scope, &before_raw, before_ty.clone(), &after_raw, before_ty, &format!("add {entry}"))? {
+    if commit(
+        reg,
+        g,
+        scope,
+        "Path",
+        Some((&before_raw, &before_ty)),
+        Some((&after_raw, &before_ty)),
+        &format!("add {entry}"),
+    )? == Committed::Delegated
+    {
         return Ok(0);
     }
     if !g.json {
@@ -67,7 +76,16 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
         return Ok(0);
     }
     confirm(g, &format!("remove '{removed}' from PATH"))?;
-    if commit_path(reg, g, scope, &before_raw, before_ty.clone(), &after_raw, before_ty, &format!("remove {removed}"))? {
+    if commit(
+        reg,
+        g,
+        scope,
+        "Path",
+        Some((&before_raw, &before_ty)),
+        Some((&after_raw, &before_ty)),
+        &format!("remove {removed}"),
+    )? == Committed::Delegated
+    {
         return Ok(0);
     }
     if !g.json {
@@ -89,7 +107,16 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         return Ok(0);
     }
     confirm(g, "dedupe PATH")?;
-    if commit_path(reg, g, scope, &before_raw, before_ty.clone(), &after_raw, before_ty, "dedupe")? {
+    if commit(
+        reg,
+        g,
+        scope,
+        "Path",
+        Some((&before_raw, &before_ty)),
+        Some((&after_raw, &before_ty)),
+        "dedupe",
+    )? == Committed::Delegated
+    {
         return Ok(0);
     }
     if !g.json {
@@ -133,16 +160,16 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
             if removed.len() == 1 { "y" } else { "ies" }
         ),
     )?;
-    if commit_path(
+    if commit(
         reg,
         g,
         scope,
-        &before_raw,
-        before_ty.clone(),
-        &after_raw,
-        before_ty,
+        "Path",
+        Some((&before_raw, &before_ty)),
+        Some((&after_raw, &before_ty)),
         &format!("prune {}", removed.len()),
-    )? {
+    )? == Committed::Delegated
+    {
         return Ok(0);
     }
     if !g.json {
@@ -178,7 +205,16 @@ pub fn move_entry(
         return Ok(0);
     }
     confirm(g, &format!("move entry {from} to position {to}"))?;
-    if commit_path(reg, g, scope, &before_raw, before_ty.clone(), &after_raw, before_ty, &format!("move {from} {to}"))? {
+    if commit(
+        reg,
+        g,
+        scope,
+        "Path",
+        Some((&before_raw, &before_ty)),
+        Some((&after_raw, &before_ty)),
+        &format!("move {from} {to}"),
+    )? == Committed::Delegated
+    {
         return Ok(0);
     }
     if !g.json {

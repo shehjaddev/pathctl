@@ -51,7 +51,10 @@ pub fn env_set(
         .as_ref()
         .map(|v| v.ty.clone())
         .unwrap_or_else(registry::default_var_type);
-    if commit_var(reg, g, scope, name, current.as_ref(), Some((value, ty)), &format!("set {name}"))? {
+    let before = current.as_ref().map(|v| (v.raw.as_str(), &v.ty));
+    if commit(reg, g, scope, name, before, Some((value, &ty)), &format!("set {name}"))?
+        == Committed::Delegated
+    {
         return Ok(0);
     }
     if !g.json {
@@ -72,7 +75,9 @@ pub fn env_delete(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Resul
         return Ok(0);
     }
     confirm(g, &format!("delete {name}"))?;
-    if commit_var(reg, g, scope, name, current.as_ref(), None, &format!("delete {name}"))? {
+    let before = current.as_ref().map(|v| (v.raw.as_str(), &v.ty));
+    if commit(reg, g, scope, name, before, None, &format!("delete {name}"))? == Committed::Delegated
+    {
         return Ok(0);
     }
     if !g.json {

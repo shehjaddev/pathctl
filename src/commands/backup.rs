@@ -280,10 +280,10 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
     // Dry-run JSON accumulates into one document; the per-item printer emits
     // one document per change, which would concatenate on stdout.
     let mut dry_changes: Vec<serde_json::Value> = Vec::new();
-    let mut apply_path = |scope: Scope, value: &ImportValue| -> Result<bool> {
+    let mut apply_path = |scope: Scope, value: &ImportValue| -> Result<Committed> {
         let (before_raw, before_ty, write_ty) = path_import_state(reg, scope, value)?;
         if before_raw == value.value && before_ty == write_ty {
-            return Ok(false);
+            return Ok(Committed::Written);
         }
         if g.dry_run {
             if g.json {
@@ -309,21 +309,29 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
                     &pathops::parse(&value.value),
                 );
             }
-            return Ok(false);
+            return Ok(Committed::Written);
         }
         planned += 1;
-        commit_path(reg, g, scope, &before_raw, before_ty, &value.value, write_ty, "import")
+        commit(
+            reg,
+            g,
+            scope,
+            "Path",
+            Some((&before_raw, &before_ty)),
+            Some((&value.value, &write_ty)),
+            "import",
+        )
     };
 
     if scopes.contains(&Scope::User)
         && let Some(v) = &data.path.user
-        && apply_path(Scope::User, v)?
+        && apply_path(Scope::User, v)? == Committed::Delegated
     {
         return Ok(0);
     }
     if scopes.contains(&Scope::System)
         && let Some(v) = &data.path.system
-        && apply_path(Scope::System, v)?
+        && apply_path(Scope::System, v)? == Committed::Delegated
     {
         return Ok(0);
     }
@@ -366,7 +374,17 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
         }
         planned += 1;
         // Delegation cannot happen for user scope, but propagate honestly.
-        if commit_var(reg, g, Scope::User, &var.name, current, Some((&var.value, state.ty.clone())), "import")? {
+        let before = state.current.as_ref().map(|v| (v.raw.as_str(), &v.ty));
+        if commit(
+            reg,
+            g,
+            Scope::User,
+            &var.name,
+            before,
+            Some((&var.value, &state.ty)),
+            "import",
+        )? == Committed::Delegated
+        {
             return Ok(0);
         }
     }

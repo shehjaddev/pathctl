@@ -294,100 +294,29 @@ fn delete_var_elev(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Resu
     }
 }
 
-/// The shared mutation tail: snapshot → write → broadcast.
-/// `before_ty` is the snapshotted (old) type; `write_ty` is the type to write
-/// (usually the same — type-preserving — except import, which restores the
-/// exported type).
-#[allow(clippy::too_many_arguments)]
-fn commit_path(
-    reg: &Registry,
-    g: &Global,
-    scope: Scope,
-    before_raw: &str,
-    before_ty: RegType,
-    after_raw: &str,
-    write_ty: RegType,
-    command: &str,
-) -> Result<bool> {
-    if before_raw == after_raw && before_ty == write_ty {
-        return Err(AppError::NoOp("PATH unchanged".into()));
-    }
-    guard_length("Path", after_raw)?;
-    let snap_path = snapshot::save(&Snapshot::with_ty(
-        scope.label(),
-        "Path",
-        before_raw,
-        after_raw,
-        command,
-        Some(registry::reg_type_to_u32(before_ty.clone())),
-    ))
-    .map_err(|e| AppError::Other(format!("snapshot failed: {e}")))?;
-    if let Err(e) = snapshot::prune() {
-        eprintln!("warning: snapshot prune failed: {e}");
-    }
-    match write_path_elev(reg, g, scope, after_raw, write_ty) {
-        Ok(false) => {},
-        Ok(true) => {
-            // Delegated to an elevated child: it will journal itself, so drop
-            // our premature snapshot to avoid a phantom entry if the child
-            // is cancelled or fails.
-            let _ = std::fs::remove_file(&snap_path);
-            eprintln!("relaunched elevated; verify with list/check (parent did not write)");
-            return Ok(true);
-        }
-        Err(e) => {
-            // The write failed (e.g. exit 3 without admin, or a registry error),
-            // so the just-saved snapshot claims a state that never happened.
-            // Best-effort remove it; otherwise `diff` would report false drift
-            // and `undo` would replay a no-op.
-            let _ = std::fs::remove_file(&snap_path);
-            return Err(e);
-        }
-    }
-    warn_long_path(after_raw);
-    if !g.no_broadcast {
-        notify::broadcast_environment();
-    }
-    Ok(false)
+/// Whether a mutation was performed by this process or handed to an elevated
+/// child (in which case the parent must not claim the write happened).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Committed {
+    Written,
+    Delegated,
 }
 
-/// Mutation tail for general env vars (set/delete).
-/// Returns `true` if delegated to an elevated child.
-fn commit_var(
-    reg: &Registry,
-    g: &Global,
+/// Journal a mutation and trim the store. Returns the snapshot path so a write
+/// that never happened can drop the record again.
+fn journal(
     scope: Scope,
     name: &str,
-    before: Option<&PathValue>,
-    after: Option<(&str, RegType)>,
+    before: &str,
+    after: &str,
     command: &str,
-) -> Result<bool> {
-    // Last line of defence for the string-only rule: writing text over a
-    // binary value (or the reverse) would destroy it.
-    if after.is_some()
-        && let Some(v) = before
-    {
-        guard_text_type(name, &v.ty)?;
-    }
-    let before_raw = before.map(|v| v.raw.clone()).unwrap_or_default();
-    let after_str = after.as_ref().map(|(v, _)| v.to_string());
-    let after_raw = after_str.clone().unwrap_or_default();
-    let before_ty = before.map(|v| v.ty.clone());
-    let after_ty = after.as_ref().map(|(_, t)| t.clone());
-    if before_raw == after_raw && before_ty == after_ty {
-        return Err(AppError::NoOp(format!("{name} already in that state")));
-    }
-    if let Some((value, _)) = &after {
-        guard_length(name, value)?;
-    }
-    let ty = before
-        .map(|v| v.ty.clone())
-        .or_else(|| after.as_ref().map(|(_, t)| t.clone()));
-    let snap_path = snapshot::save(&Snapshot::with_ty(
+    ty: Option<RegType>,
+) -> Result<std::path::PathBuf> {
+    let path = snapshot::save(&Snapshot::with_ty(
         scope.label(),
         name,
-        &before_raw,
-        &after_raw,
+        before,
+        after,
         command,
         ty.map(registry::reg_type_to_u32),
     ))
@@ -395,28 +324,84 @@ fn commit_var(
     if let Err(e) = snapshot::prune() {
         eprintln!("warning: snapshot prune failed: {e}");
     }
-    let result = match &after {
-        Some((value, t)) => write_var_elev(reg, g, scope, name, value, t.clone()),
+    Ok(path)
+}
+
+/// The shared mutation tail: snapshot, write, broadcast.
+///
+/// `before` and `after` describe the value as it is and as it should become;
+/// `None` means the value does not exist (`after: None` deletes it). The
+/// registry value type is preserved unless the caller passes another one,
+/// which only import does, to restore an exported type.
+#[allow(clippy::too_many_arguments)]
+fn commit(
+    reg: &Registry,
+    g: &Global,
+    scope: Scope,
+    name: &str,
+    before: Option<(&str, &RegType)>,
+    after: Option<(&str, &RegType)>,
+    command: &str,
+) -> Result<Committed> {
+    let before_raw = before.map(|(v, _)| v).unwrap_or_default();
+    let after_raw = after.map(|(v, _)| v).unwrap_or_default();
+    let before_ty = before.map(|(_, t)| t);
+    let after_ty = after.map(|(_, t)| t);
+    if before_raw == after_raw && before_ty == after_ty {
+        return Err(AppError::NoOp(if name == "Path" {
+            "PATH unchanged".into()
+        } else {
+            format!("{name} already in that state")
+        }));
+    }
+    // Strings only: writing text over a binary value (or the reverse) would
+    // destroy it.
+    if after.is_some()
+        && let Some(ty) = before_ty
+    {
+        guard_text_type(name, ty)?;
+    }
+    if let Some((value, _)) = after {
+        guard_length(name, value)?;
+    }
+    let snap_path = journal(
+        scope,
+        name,
+        before_raw,
+        after_raw,
+        command,
+        before_ty.or(after_ty).cloned(),
+    )?;
+    let write = match after {
+        Some((value, ty)) if name == "Path" => write_path_elev(reg, g, scope, value, ty.clone()),
+        Some((value, ty)) => write_var_elev(reg, g, scope, name, value, ty.clone()),
         None => delete_var_elev(reg, g, scope, name),
     };
-    match result {
-        Ok(false) => {},
+    match write {
+        Ok(false) => {}
         Ok(true) => {
+            // Delegated to an elevated child: it journals itself, so drop our
+            // premature snapshot rather than leave a phantom entry behind.
             let _ = std::fs::remove_file(&snap_path);
-            eprintln!("relaunched elevated; verify with env get (parent did not write)");
-            return Ok(true);
+            let verify = if name == "Path" { "list/check" } else { "env get" };
+            eprintln!("relaunched elevated; verify with {verify} (parent did not write)");
+            return Ok(Committed::Delegated);
         }
         Err(e) => {
-            // Same phantom-snapshot guard as commit_path: a failed write must not
-            // leave a journal entry claiming the new state exists.
+            // The write failed (exit 3 without admin, or a registry error), so
+            // the snapshot claims a state that never happened: drop it, or
+            // `diff` reports false drift and `undo` replays a no-op.
             let _ = std::fs::remove_file(&snap_path);
             return Err(e);
         }
     }
+    if name == "Path" {
+        warn_long_path(after_raw);
+    }
     if !g.no_broadcast {
         notify::broadcast_environment();
     }
-    Ok(false)
+    Ok(Committed::Written)
 }
 
 /// Which snapshot domain an `undo --kind` filter selects.

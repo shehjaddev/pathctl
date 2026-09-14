@@ -96,18 +96,14 @@ pub fn undo(
     // undo would otherwise target a snapshot whose restore is a no-op. The
     // pre-undo state stays recoverable from the undone snapshot's `before`,
     // so crash-safety is unchanged.
-    snapshot::save(&Snapshot::with_ty(
-        &target.scope,
+    journal(
+        scope,
         &name,
         &before_raw,
         &restore_raw,
         &format!("undo of {}", target.ts),
-        current.as_ref().map(|v| registry::reg_type_to_u32(v.ty.clone())),
-    ))
-    .map_err(|e| AppError::Other(format!("snapshot failed: {e}")))?;
-    if let Err(e) = snapshot::prune() {
-        eprintln!("warning: snapshot prune failed: {e}");
-    }
+        current.as_ref().map(|v| v.ty.clone()),
+    )?;
     if !g.no_broadcast {
         notify::broadcast_environment();
     }
