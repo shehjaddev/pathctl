@@ -549,6 +549,38 @@ fn undo_restores_and_is_itself_undoable() {
 }
 
 #[test]
+fn undo_restores_an_absent_path_as_absent() {
+    let dir = setup("undo_absent");
+    // The test key starts with no Path value at all.
+    pathctl("undo_absent", dir.path())
+        .arg("add")
+        .arg(r"C:\pathctl-ua")
+        .assert()
+        .success();
+    pathctl("undo_absent", dir.path())
+        .arg("undo")
+        .assert()
+        .success();
+    // Undo must restore what the snapshot recorded (no value), not an empty one.
+    let out = pathctl("undo_absent", dir.path())
+        .arg("export")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("export JSON");
+    assert!(
+        v["path"]["user"].is_null(),
+        "expected the value to be gone, got {}",
+        v["path"]["user"]
+    );
+    pathctl("undo_absent", dir.path())
+        .arg("env")
+        .arg("get")
+        .arg("Path")
+        .assert()
+        .code(4);
+}
+
+#[test]
 fn undo_to_specific_snapshot() {
     let dir = setup("undo_to");
     let a = r"C:\pathctl-uto-a";

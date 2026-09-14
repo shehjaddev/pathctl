@@ -94,11 +94,18 @@ pub fn undo(
     guard_length(&name, &restore_raw)?;
 
     let delegated = if name == "Path" {
-        let d = write_path_elev(reg, g, scope, &restore_raw, ty)?;
-        if !d {
-            warn_long_path(&restore_raw);
+        if restore_raw.is_empty() {
+            // The snapshot recorded that the value did not exist, so restore
+            // absence rather than leaving an empty value behind (the variable
+            // branch below does the same).
+            delete_var_elev(reg, g, scope, "Path")?
+        } else {
+            let d = write_path_elev(reg, g, scope, &restore_raw, ty)?;
+            if !d {
+                warn_long_path(&restore_raw);
+            }
+            d
         }
-        d
     } else if restore_raw.is_empty() {
         delete_var_elev(reg, g, scope, &name)?
     } else {
