@@ -93,25 +93,25 @@ pub fn undo(
     confirm(g, &format!("undo '{}' ({})", target.command, target.ts))?;
     guard_length(&name, &restore_raw)?;
 
-    let delegated = if name == "Path" {
+    let committed = if name == "Path" {
         if restore_raw.is_empty() {
             // The snapshot recorded that the value did not exist, so restore
             // absence rather than leaving an empty value behind (the variable
             // branch below does the same).
             delete_var_elev(reg, g, scope, "Path")?
         } else {
-            let d = write_path_elev(reg, g, scope, &restore_raw, ty)?;
-            if !d {
+            let committed = write_path_elev(reg, g, scope, &restore_raw, ty)?;
+            if committed == Committed::Written {
                 warn_long_path(&restore_raw);
             }
-            d
+            committed
         }
     } else if restore_raw.is_empty() {
         delete_var_elev(reg, g, scope, &name)?
     } else {
         write_var_elev(reg, g, scope, &name, &restore_raw, ty)?
     };
-    if delegated {
+    if committed == Committed::Delegated {
         eprintln!("relaunched elevated; verify with list/env get (parent did not write)");
         return Ok(0);
     }

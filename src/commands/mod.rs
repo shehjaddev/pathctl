@@ -265,15 +265,17 @@ fn confirm(g: &Global, action: &str) -> Result<()> {
 /// with `--elevate` the process relaunches via UAC. Anything else is a plain
 /// registry error (exit 5). Kept separate from the write helpers so the
 /// exit-3 contract is unit-testable.
-///
-/// Returns `Ok(true)` when the change was delegated to an elevated child
-/// (parent must not claim success); `Ok(false)` when written directly.
-fn write_error_to_app(g: &Global, scope: Scope, e: io::Error, elevate_msg: &str) -> Result<bool> {
+fn write_error_to_app(
+    g: &Global,
+    scope: Scope,
+    e: io::Error,
+    elevate_msg: &str,
+) -> Result<Committed> {
     if scope == Scope::System && e.kind() == io::ErrorKind::PermissionDenied {
         if g.elevate {
             crate::elevate::relaunch_elevated()
                 .map_err(|e| AppError::Other(format!("elevation failed: {e}")))?;
-            Ok(true)
+            Ok(Committed::Delegated)
         } else {
             Err(AppError::ElevationRequired(elevate_msg.into()))
         }
@@ -283,16 +285,15 @@ fn write_error_to_app(g: &Global, scope: Scope, e: io::Error, elevate_msg: &str)
 }
 
 /// Write with elevation fallback for system scope (exit 3 / --elevate).
-/// Returns `true` if delegated to an elevated child.
 fn write_path_elev(
     reg: &Registry,
     g: &Global,
     scope: Scope,
     value: &str,
     ty: RegType,
-) -> Result<bool> {
+) -> Result<Committed> {
     match reg.write_path(scope, value, ty) {
-        Ok(()) => Ok(false),
+        Ok(()) => Ok(Committed::Written),
         Err(e) => write_error_to_app(
             g,
             scope,
@@ -309,9 +310,9 @@ fn write_var_elev(
     name: &str,
     value: &str,
     ty: RegType,
-) -> Result<bool> {
+) -> Result<Committed> {
     match reg.write_var(scope, name, value, ty) {
-        Ok(()) => Ok(false),
+        Ok(()) => Ok(Committed::Written),
         Err(e) => write_error_to_app(
             g,
             scope,
@@ -323,10 +324,9 @@ fn write_var_elev(
 
 /// Delete with the same elevation contract as writes: a system-scope
 /// `PermissionDenied` without `--elevate` is exit 3, not a raw registry error.
-/// Returns `true` if delegated to an elevated child.
-fn delete_var_elev(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Result<bool> {
+fn delete_var_elev(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Result<Committed> {
     match reg.delete_var(scope, name) {
-        Ok(()) => Ok(false),
+        Ok(()) => Ok(Committed::Written),
         Err(e) => write_error_to_app(
             g,
             scope,
@@ -420,8 +420,8 @@ fn commit(
         None => delete_var_elev(reg, g, scope, name),
     };
     match write {
-        Ok(false) => {}
-        Ok(true) => {
+        Ok(Committed::Written) => {}
+        Ok(Committed::Delegated) => {
             // Delegated to an elevated child: it journals itself, so drop our
             // premature snapshot rather than leave a phantom entry behind.
             let _ = std::fs::remove_file(&snap_path);
@@ -553,7 +553,10 @@ mod tests {
         )
         .unwrap();
         let g = Global::default();
-        assert!(!delete_var_elev(&reg, &g, Scope::User, "PATHCTL_DEL_TEST").unwrap());
+        assert_eq!(
+            delete_var_elev(&reg, &g, Scope::User, "PATHCTL_DEL_TEST").unwrap(),
+            Committed::Written
+        );
         assert!(
             reg.read_var(Scope::User, "PATHCTL_DEL_TEST")
                 .unwrap()
