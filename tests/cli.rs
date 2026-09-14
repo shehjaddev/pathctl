@@ -56,6 +56,48 @@ fn setup(name: &str) -> TestCtx {
     }
 }
 
+/// Open the user key of a test key for direct registry access. The key must
+/// already exist (any mutation creates it).
+fn test_key(name: &str) -> winreg::RegKey {
+    use winreg::enums::{KEY_READ, KEY_WRITE};
+    winreg::HKCU
+        .open_subkey_with_flags(
+            format!(r"Software\pathctl-test-{name}\user"),
+            KEY_READ | KEY_WRITE,
+        )
+        .unwrap()
+}
+
+/// Write a raw registry value, bypassing the binary.
+fn write_raw(key: &winreg::RegKey, name: &str, bytes: &[u8], vtype: winreg::enums::RegType) {
+    use winreg::RegValue;
+    key.set_raw_value(
+        name,
+        &RegValue {
+            bytes: bytes.to_vec().into(),
+            vtype,
+        },
+    )
+    .unwrap();
+}
+
+/// Registry string bytes: UTF-16LE with the trailing NUL.
+fn wide_bytes(s: &str) -> Vec<u8> {
+    let mut wide: Vec<u16> = s.encode_utf16().collect();
+    wide.push(0);
+    wide.iter().flat_map(|u| u.to_le_bytes()).collect()
+}
+
+/// Write the Path value of a test key directly, bypassing the binary.
+fn write_path_direct(name: &str, value: &str) {
+    write_raw(
+        &test_key(name),
+        "Path",
+        &wide_bytes(value),
+        winreg::enums::REG_EXPAND_SZ,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // list / check
 // ---------------------------------------------------------------------------
@@ -827,48 +869,6 @@ fn diff_tracks_external_drift_and_clears_after_undo() {
     // undo restores the recorded before; diff clears
     pathctl("diff", dir.path()).arg("undo").assert().success();
     pathctl("diff", dir.path()).arg("diff").assert().code(0);
-}
-
-/// Open the user key of a test key for direct registry access. The key must
-/// already exist (any mutation creates it).
-fn test_key(name: &str) -> winreg::RegKey {
-    use winreg::enums::{KEY_READ, KEY_WRITE};
-    winreg::HKCU
-        .open_subkey_with_flags(
-            format!(r"Software\pathctl-test-{name}\user"),
-            KEY_READ | KEY_WRITE,
-        )
-        .unwrap()
-}
-
-/// Write a raw registry value, bypassing the binary.
-fn write_raw(key: &winreg::RegKey, name: &str, bytes: &[u8], vtype: winreg::enums::RegType) {
-    use winreg::RegValue;
-    key.set_raw_value(
-        name,
-        &RegValue {
-            bytes: bytes.to_vec().into(),
-            vtype,
-        },
-    )
-    .unwrap();
-}
-
-/// Registry string bytes: UTF-16LE with the trailing NUL.
-fn wide_bytes(s: &str) -> Vec<u8> {
-    let mut wide: Vec<u16> = s.encode_utf16().collect();
-    wide.push(0);
-    wide.iter().flat_map(|u| u.to_le_bytes()).collect()
-}
-
-/// Write the Path value of a test key directly, bypassing the binary.
-fn write_path_direct(name: &str, value: &str) {
-    write_raw(
-        &test_key(name),
-        "Path",
-        &wide_bytes(value),
-        winreg::enums::REG_EXPAND_SZ,
-    );
 }
 
 #[test]
