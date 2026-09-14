@@ -59,26 +59,34 @@ pub fn add(
     Ok(0)
 }
 
+/// A `remove` target. `#3` is always an index; anything else is an entry name
+/// first, and a bare number is a 1-based index only when no entry has it.
+enum Target<'a> {
+    Index(usize),
+    Name(&'a str),
+}
+
+fn parse_target(target: &str) -> Target<'_> {
+    if let Some(rest) = target.strip_prefix('#')
+        && let Ok(index) = rest.parse::<usize>()
+    {
+        return Target::Index(index);
+    }
+    Target::Name(target)
+}
+
 pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<u8> {
     let (before_raw, before_ty) = current_path(reg, scope)?;
     let mut entries = pathops::parse(&before_raw);
-    // `#3` is always an index. A bare number prefers an exact path match
-    // first (so a directory literally named `123` stays removable by path),
-    // falling back to index for backwards compatibility with `remove 3`.
-    let removed = if let Some(hash_idx) = target
-        .strip_prefix('#')
-        .and_then(|s| s.parse::<usize>().ok())
-    {
-        Some(
-            pathops::remove_index(&mut entries, hash_idx)
-                .map_err(|e| AppError::Usage(e.to_string()))?,
-        )
-    } else if let Some(pos) = entries.iter().position(|e| pathops::eq(e, target)) {
-        Some(entries.remove(pos))
-    } else if let Some(idx) = parse_index(target) {
-        Some(pathops::remove_index(&mut entries, idx).map_err(|e| AppError::Usage(e.to_string()))?)
-    } else {
-        None
+    let removed = match parse_target(target) {
+        Target::Index(index) => Some(remove_at(&mut entries, index)?),
+        Target::Name(name) => match entries.iter().position(|e| pathops::eq(e, name)) {
+            Some(pos) => Some(entries.remove(pos)),
+            None => match name.parse::<usize>() {
+                Ok(index) => Some(remove_at(&mut entries, index)?),
+                Err(_) => None,
+            },
+        },
     };
     let after_raw = entries.join(";");
 
@@ -110,6 +118,11 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
         &format!("removed: {removed}"),
     );
     Ok(0)
+}
+
+/// Remove the entry at 1-based `index`, reporting a bad index as a usage error.
+fn remove_at(entries: &mut Vec<String>, index: usize) -> Result<String> {
+    pathops::remove_index(entries, index).map_err(|e| AppError::Usage(e.to_string()))
 }
 
 pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
@@ -233,10 +246,4 @@ pub fn move_entry(reg: &Registry, g: &Global, scope: Scope, from: usize, to: usi
         &format!("moved: {from} -> {to}"),
     );
     Ok(0)
-}
-
-/// Accepts `3` or `#3`.
-fn parse_index(target: &str) -> Option<usize> {
-    let s = target.strip_prefix('#').unwrap_or(target);
-    s.parse::<usize>().ok()
 }
