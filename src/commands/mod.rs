@@ -120,7 +120,7 @@ fn analyze_entry(entry: &str) -> EntryAnalysis {
     let target = util::expand(unquoted);
     EntryAnalysis {
         unresolvable: util::has_var_ref(unquoted) && target == unquoted,
-        missing: !util::dir_exists(&target),
+        missing: !std::path::Path::new(&target).is_dir(),
         expanded: target != unquoted,
     }
 }

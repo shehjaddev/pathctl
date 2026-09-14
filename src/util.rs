@@ -57,11 +57,6 @@ pub fn expand(s: &str) -> String {
     String::from_utf16_lossy(&retry[..n as usize - 1])
 }
 
-/// True if `p` exists and is a directory. Does not resolve `%VAR%`.
-pub fn dir_exists(p: &str) -> bool {
-    std::path::Path::new(p).is_dir()
-}
-
 /// True if `p` contains a `%VAR%`-style reference (`%NAME%` with a
 /// non-empty name). A lone `%` (e.g. `C:\100%_coverage`) is not a reference.
 pub fn has_var_ref(p: &str) -> bool {
