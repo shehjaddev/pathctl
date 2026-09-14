@@ -8,7 +8,7 @@ mod registry;
 mod snapshot;
 mod util;
 
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand};
 use commands::{Global, Result};
 use registry::Registry;
 use std::process::ExitCode;
@@ -86,7 +86,7 @@ enum Cmd {
         to: Option<usize>,
         /// Only consider path or environment-variable snapshots
         #[arg(long, value_enum)]
-        kind: Option<UndoKind>,
+        kind: Option<commands::SnapshotKind>,
     },
     /// Diff current PATH against a snapshot (exit 1 if it differs)
     Diff {
@@ -112,15 +112,6 @@ enum Cmd {
         #[command(subcommand)]
         cmd: EnvCmd,
     },
-}
-
-/// Snapshot domain filter for `undo`.
-#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum UndoKind {
-    /// PATH snapshots only
-    Path,
-    /// Environment-variable snapshots only
-    Env,
 }
 
 #[derive(Subcommand)]
@@ -186,14 +177,10 @@ fn run(cli: Cli, g: Global, reg: &Registry) -> Result<u8> {
         }
         Cmd::Undo { list, to, kind } => {
             let scope = commands::mutation_scope(cli.scope.as_deref())?;
-            let kind = kind.map(|k| match k {
-                UndoKind::Path => commands::SnapshotKind::Path,
-                UndoKind::Env => commands::SnapshotKind::Var,
-            });
             if *list {
-                commands::undo_list(&g, Some(scope), kind)
+                commands::undo_list(&g, Some(scope), *kind)
             } else {
-                commands::undo(reg, &g, Some(scope), kind, *to)
+                commands::undo(reg, &g, Some(scope), *kind, *to)
             }
         }
         Cmd::Diff { to } => {

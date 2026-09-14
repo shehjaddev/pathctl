@@ -12,6 +12,7 @@ use crate::pathops::{self, Change};
 use crate::registry::{self, PathValue, RegType, Registry, Scope};
 use crate::snapshot::{self, Snapshot};
 use crate::util;
+use clap::ValueEnum;
 use serde::Serialize;
 use std::io;
 
@@ -449,13 +450,14 @@ fn commit(
     Ok(Committed::Written)
 }
 
-/// Which snapshot domain an `undo --kind` filter selects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which snapshots an `undo --kind` filter selects. The variant names are the
+/// values clap accepts (`path`, `env`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SnapshotKind {
-    /// PATH snapshots (name `Path`).
+    /// PATH snapshots (the `Path` value).
     Path,
-    /// Environment-variable snapshots (any other name).
-    Var,
+    /// Environment-variable snapshots (any other value).
+    Env,
 }
 
 fn snapshots_filtered(
@@ -471,7 +473,7 @@ fn snapshots_filtered(
         .filter(|s| {
             kind.is_none_or(|k| match k {
                 SnapshotKind::Path => s.name == "Path",
-                SnapshotKind::Var => s.name != "Path",
+                SnapshotKind::Env => s.name != "Path",
             })
         })
         .collect())
