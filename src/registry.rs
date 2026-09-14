@@ -41,50 +41,46 @@ pub struct PathValue {
     pub ty: RegType,
 }
 
-/// Registry access. `test` redirects all scopes under
+/// Registry access. `test_suffix` redirects all scopes under
 /// `HKCU\Software\pathctl-test\{user,system}` so tests never touch the real
-/// PATH (spec §8).
+/// PATH.
 #[derive(Debug, Clone)]
 pub struct Registry {
-    test: bool,
+    /// `Some(suffix)` keeps every scope under `Software\pathctl-test<suffix>`
+    /// in `HKCU`; `None` uses the real hives.
+    test_suffix: Option<String>,
 }
 
 impl Registry {
     /// Prod instance. `PATHCTL_TEST_REG` redirects writes to a scratch key
     /// under `HKCU\Software\pathctl-test…` (CLI tests).
     pub fn new() -> Self {
-        Self { test: false }
+        Self {
+            test_suffix: test_suffix_from_env(),
+        }
     }
 
     /// Explicit test instance (unit tests; no env race). CLI tests instead
     /// spawn the binary with `PATHCTL_TEST_REG`.
     #[cfg(test)]
     pub fn test() -> Self {
-        Self { test: true }
+        Self {
+            test_suffix: Some(String::new()),
+        }
     }
 
     fn key_path(&self, scope: Scope) -> String {
-        if let Some(v) = std::env::var_os("PATHCTL_TEST_REG") {
-            // CLI tests: `PATHCTL_TEST_REG=1` → default key; any other value
-            // → `Software\pathctl-test-<value>`, giving each test an isolated key.
-            let suffix = if v == "1" {
-                String::new()
-            } else {
-                format!("-{}", v.to_string_lossy())
-            };
-            format!(r"{TEST_KEY_PREFIX}{suffix}\{}", scope.label())
-        } else if self.test {
-            format!(r"{TEST_KEY_PREFIX}\{}", scope.label())
-        } else {
-            match scope {
+        match &self.test_suffix {
+            Some(suffix) => format!(r"{TEST_KEY_PREFIX}{suffix}\{}", scope.label()),
+            None => match scope {
                 Scope::User => USER_KEY_PATH.to_string(),
                 Scope::System => SYSTEM_KEY_PATH.to_string(),
-            }
+            },
         }
     }
 
     fn hive(&self, scope: Scope) -> &'static RegKey {
-        if self.test || std::env::var_os("PATHCTL_TEST_REG").is_some() {
+        if self.test_suffix.is_some() {
             // Test mode redirects every scope under HKCU, so the hive must
             // follow (system scope would otherwise hit real HKLM keys).
             HKCU
@@ -192,6 +188,19 @@ impl Registry {
         }
         Ok(out)
     }
+}
+
+/// Resolve the `PATHCTL_TEST_REG` override once, at startup. `1` selects the
+/// default scratch key; any other value selects `Software\pathctl-test-<value>`
+/// so tests running in parallel stay isolated.
+fn test_suffix_from_env() -> Option<String> {
+    std::env::var_os("PATHCTL_TEST_REG").map(|v| {
+        if v == "1" {
+            String::new()
+        } else {
+            format!("-{}", v.to_string_lossy())
+        }
+    })
 }
 
 /// Default type for a *new* PATH value: expandable, like Windows ships it.
