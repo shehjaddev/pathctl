@@ -58,6 +58,37 @@ nothing, and always exits 0), `-y` (skip confirmation), `--no-broadcast`
 - `6` other failure: snapshot store, file I/O, elevation launch, non-string
   registry value
 
+## JSON output
+
+`--json` prints exactly one JSON document per run (never two concatenated
+objects). Where a field can be absent, the shape below says which way: a
+`check` finding carries only the fields its `kind` has, a snapshot omits `ty`
+when the type is unknown, and an export writes `null` for a scope's PATH when
+that value does not exist.
+
+| Command | Shape |
+|---|---|
+| `list` | `[{"scope","entries":[{"index","entry","flags"}]}]`, one object per scope. `flags` holds any of `expanded`, `unresolvable`, `missing`, `dup` |
+| `check` | `{"ok":bool,"findings":[{"kind","scope",...}]}`. `kind` is one of `duplicate`, `unresolvable`, `missing` (each with `entry`), `entry_too_long` (with `entry` and `limit`), `value_over_limit`, `value_near_limit` (each with `units` and `limit`) |
+| `diff` | `[{"scope","base","current","changes"}]`. With no recorded baseline the object also carries `"note"` and empty `changes` |
+| `undo --list` | the snapshots themselves: `[{"scope","name","before","after","command","ts","ty"}]` (`ts` is Unix nanoseconds, `ty` the registry type, omitted when unknown) |
+| `env get` | `{"scope","name","value","ty"}`; an unset variable exits `4` and prints nothing |
+| `add`, `remove`, `dedupe`, `prune`, `move`, `env set`, `env delete`, `undo` | `{"scope","name","action","before","after","changes"}`, where `action` is the command, `before`/`after` are the entry lists (a variable is a one-element list, empty when unset) and `changes` holds `{"added"\|"removed"\|"moved": entry}` objects |
+| any mutation with `--dry-run` | `{"before","after","changes"}` -- the preview has no `scope`, `name` or `action` because nothing happened yet |
+| `import` | `{"action":"import","applied":N,"changes":[...]}`; with `--dry-run` it prints the bare `changes` array. Each item is `{"scope","name","before","after"}`, plus `ty_before`/`ty_after` for PATH items |
+| `export` | the backup file itself: `{"tool","version","path":{"user":{"value","ty"},"system":{...}\|null},"variables":{"user":[{"name","value","ty"}]}}`. This is also the input format for `import` |
+| `completions` | a shell script, not JSON |
+
+Example -- the same change, previewed and then applied:
+
+```console
+$ pathctl add C:\tools --dry-run --json
+{"before":["C:\\bin"],"after":["C:\\bin","C:\\tools"],"changes":[{"added":"C:\\tools"}]}
+
+$ pathctl add C:\tools --json
+{"scope":"user","name":"Path","action":"add","before":["C:\\bin"],"after":["C:\\bin","C:\\tools"],"changes":[{"added":"C:\\tools"}]}
+```
+
 ## How it stays safe
 
 - **Never `setx`** - registry writes go directly to `HKCU\Environment\Path`
