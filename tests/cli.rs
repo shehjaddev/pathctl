@@ -705,24 +705,115 @@ fn diff_tracks_external_drift_and_clears_after_undo() {
     pathctl("diff", dir.path()).arg("diff").assert().code(0);
 }
 
-/// Write the Path value of a test key directly, bypassing the binary.
-fn write_path_direct(name: &str, value: &str) {
-    use winreg::enums::{KEY_READ, KEY_WRITE, REG_EXPAND_SZ};
-    use winreg::RegValue;
-    let key = winreg::HKCU
+/// Open the user key of a test key for direct registry access. The key must
+/// already exist (any mutation creates it).
+fn test_key(name: &str) -> winreg::RegKey {
+    use winreg::enums::{KEY_READ, KEY_WRITE};
+    winreg::HKCU
         .open_subkey_with_flags(
             format!(r"Software\pathctl-test-{name}\user"),
             KEY_READ | KEY_WRITE,
         )
-        .unwrap();
-    let mut wide: Vec<u16> = value.encode_utf16().collect();
+        .unwrap()
+}
+
+/// Write a raw registry value, bypassing the binary.
+fn write_raw(key: &winreg::RegKey, name: &str, bytes: &[u8], vtype: winreg::enums::RegType) {
+    use winreg::RegValue;
+    key.set_raw_value(
+        name,
+        &RegValue {
+            bytes: bytes.to_vec().into(),
+            vtype,
+        },
+    )
+    .unwrap();
+}
+
+/// Registry string bytes: UTF-16LE with the trailing NUL.
+fn wide_bytes(s: &str) -> Vec<u8> {
+    let mut wide: Vec<u16> = s.encode_utf16().collect();
     wide.push(0);
-    let mut bytes = Vec::new();
-    for u in wide {
-        bytes.extend_from_slice(&u.to_le_bytes());
-    }
-    key.set_raw_value("Path", &RegValue { bytes: bytes.into(), vtype: REG_EXPAND_SZ })
+    wide.iter().flat_map(|u| u.to_le_bytes()).collect()
+}
+
+/// Write the Path value of a test key directly, bypassing the binary.
+fn write_path_direct(name: &str, value: &str) {
+    write_raw(
+        &test_key(name),
+        "Path",
+        &wide_bytes(value),
+        winreg::enums::REG_EXPAND_SZ,
+    );
+}
+
+#[test]
+fn non_string_values_are_left_alone() {
+    let dir = setup("nonstring");
+    // A REG_BINARY value under Environment is not a string, so it has no place
+    // in the JSON format -- reading, exporting or importing it as text would
+    // corrupt it (and an earlier version did exactly that).
+    let binary = [0x61u8, 0x00, 0x62, 0x00, 0x63];
+    pathctl("nonstring", dir.path())
+        .arg("add")
+        .arg(r"C:\pathctl-ns")
+        .assert()
+        .success();
+    let key = test_key("nonstring");
+    write_raw(&key, "PATHCTL_BIN", &binary, winreg::enums::REG_BINARY);
+
+    pathctl("nonstring", dir.path())
+        .arg("env")
+        .arg("get")
+        .arg("PATHCTL_BIN")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("REG_BINARY"));
+
+    let out = pathctl("nonstring", dir.path())
+        .arg("export")
+        .output()
         .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid export JSON");
+    assert!(
+        v["variables"]["user"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|x| x["name"] != "PATHCTL_BIN"),
+        "a non-string value must not be exported as text"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("PATHCTL_BIN"),
+        "skipping a value must be reported"
+    );
+
+    // A file that asks for a binary value is refused before anything is written.
+    let f = dir.path().join("binary.json");
+    let doc = serde_json::json!({
+        "tool": "pathctl",
+        "version": 1,
+        "path": {},
+        "variables": { "user": [{ "name": "PATHCTL_BIN2", "value": "ab", "ty": 3 }] },
+    });
+    std::fs::write(&f, serde_json::to_string(&doc).unwrap()).unwrap();
+    pathctl("nonstring", dir.path())
+        .arg("import")
+        .arg(&f)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("REG_BINARY"));
+    pathctl("nonstring", dir.path())
+        .arg("env")
+        .arg("get")
+        .arg("PATHCTL_BIN2")
+        .assert()
+        .code(4);
+
+    // The original value is byte-for-byte untouched.
+    let raw = key.get_raw_value("PATHCTL_BIN").unwrap();
+    assert_eq!(raw.bytes.to_vec(), binary);
+    assert_eq!(raw.vtype, winreg::enums::REG_BINARY);
 }
 
 // ---------------------------------------------------------------------------

@@ -213,6 +213,13 @@ pub fn default_var_type() -> RegType {
     REG_SZ
 }
 
+/// True for the registry value types that hold a plain string, i.e. the only
+/// ones whose contents survive a `String` round trip. `REG_MULTI_SZ` is
+/// deliberately excluded: it is NUL-separated, not a single string.
+pub fn is_text_type(ty: &RegType) -> bool {
+    matches!(ty, REG_SZ | REG_EXPAND_SZ)
+}
+
 /// Stable u32 form for JSON (snapshots, exports).
 pub fn reg_type_to_u32(t: RegType) -> u32 {
     t as isize as u32

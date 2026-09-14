@@ -106,6 +106,24 @@ fn analyze_entry(entry: &str) -> EntryAnalysis {
     }
 }
 
+/// Display name for a registry value type (`REG_SZ`, `REG_BINARY`, ...).
+fn ty_name(ty: &RegType) -> String {
+    format!("{ty:?}")
+}
+
+/// The JSON backup format and the `env` commands model plain strings only.
+/// Reading or writing any other value type as text destroys its contents, so
+/// refuse instead of guessing.
+fn guard_text_type(name: &str, ty: &RegType) -> Result<()> {
+    if registry::is_text_type(ty) {
+        return Ok(());
+    }
+    Err(AppError::Other(format!(
+        "refusing to handle {name}: it has registry type {}; pathctl only handles string values (REG_SZ, REG_EXPAND_SZ)",
+        ty_name(ty)
+    )))
+}
+
 fn print_changes(json: bool, before: &[String], after: &[String]) {
     let changes = pathops::diff_entries(before, after);
     if json {
@@ -320,6 +338,13 @@ fn commit_var(
     after: Option<(&str, RegType)>,
     command: &str,
 ) -> Result<bool> {
+    // Last line of defence for the string-only rule: writing text over a
+    // binary value (or the reverse) would destroy it.
+    if after.is_some()
+        && let Some(v) = before
+    {
+        guard_text_type(name, &v.ty)?;
+    }
     let before_raw = before.map(|v| v.raw.clone()).unwrap_or_default();
     let after_str = after.as_ref().map(|(v, _)| v.to_string());
     let after_raw = after_str.clone().unwrap_or_default();

@@ -51,23 +51,44 @@ fn check_output_path(path: &std::path::Path) -> Result<()> {
 
 pub fn export(reg: &Registry, output: Option<&std::path::Path>) -> Result<u8> {
     let read = |scope: Scope| -> Result<Option<ExportValue>> {
-        Ok(reg.read_path(scope)?.map(|v| ExportValue {
-            value: v.raw,
-            ty: registry::reg_type_to_u32(v.ty),
-        }))
+        match reg.read_path(scope)? {
+            Some(v) => {
+                guard_text_type("Path", &v.ty)?;
+                Ok(Some(ExportValue {
+                    value: v.raw,
+                    ty: registry::reg_type_to_u32(v.ty),
+                }))
+            }
+            None => Ok(None),
+        }
     };
-    let vars = reg
-        .enum_all(Scope::User)?
-        .into_iter()
+    let mut vars = Vec::new();
+    let mut skipped = Vec::new();
+    for (name, v) in reg.enum_all(Scope::User)? {
         // Path already lives in `path.*`; repeating it in `variables.user`
-        // exported the same value twice (handoff #3).
-        .filter(|(name, _)| !name.eq_ignore_ascii_case("Path"))
-        .map(|(name, v)| ExportVar {
+        // exported the same value twice.
+        if name.eq_ignore_ascii_case("Path") {
+            continue;
+        }
+        // Only strings fit the format; say so rather than writing a value that
+        // import would refuse (or worse, that would come back mangled).
+        if !registry::is_text_type(&v.ty) {
+            skipped.push(format!("{name} ({})", ty_name(&v.ty)));
+            continue;
+        }
+        vars.push(ExportVar {
             name,
             value: v.raw,
             ty: registry::reg_type_to_u32(v.ty),
-        })
-        .collect();
+        });
+    }
+    if !skipped.is_empty() {
+        eprintln!(
+            "warning: export omits {} non-string value(s): {}",
+            skipped.len(),
+            skipped.join(", ")
+        );
+    }
     let file = ExportFile {
         tool: "pathctl",
         version: 1,
@@ -122,15 +143,6 @@ struct ImportVar {
     ty: Option<u32>,
 }
 
-/// Short display name for common registry types (dry-run notes).
-fn ty_name(ty: RegType) -> String {
-    match registry::reg_type_to_u32(ty) {
-        1 => "REG_SZ".to_string(),
-        2 => "REG_EXPAND_SZ".to_string(),
-        n => format!("type {n}"),
-    }
-}
-
 /// Current state plus target type for an imported PATH value.
 fn path_import_state(
     reg: &Registry,
@@ -138,10 +150,18 @@ fn path_import_state(
     value: &ImportValue,
 ) -> Result<(String, RegType, RegType)> {
     let (before_raw, before_ty) = current_path(reg, scope)?;
+    guard_text_type("Path", &before_ty)?;
     let write_ty = value
         .ty
         .map(registry::reg_type_from_u32)
         .unwrap_or_else(|| before_ty.clone());
+    if !registry::is_text_type(&write_ty) {
+        return Err(AppError::Usage(format!(
+            "refusing to import the {} PATH: {} is not a string type",
+            scope.label(),
+            ty_name(&write_ty)
+        )));
+    }
     Ok((before_raw, before_ty, write_ty))
 }
 
@@ -168,6 +188,38 @@ fn var_import_ty(current: Option<&PathValue>, var: &ImportVar) -> RegType {
         .unwrap_or_else(registry::default_var_type)
 }
 
+/// What an imported variable would need: the value it currently holds and the
+/// type to write. `None` means the entry must be skipped.
+struct ImportVarState {
+    current: Option<PathValue>,
+    ty: RegType,
+}
+
+/// Validate and read one import entry. Skips what export never produces (the
+/// reserved `Path` name, invalid names) and refuses what the format cannot
+/// carry (non-string types), so the plan and the apply pass cannot disagree.
+fn var_import_state(reg: &Registry, var: &ImportVar) -> Result<Option<ImportVarState>> {
+    if var.name.eq_ignore_ascii_case("Path") || valid_var_name(&var.name).is_err() {
+        return Ok(None);
+    }
+    if let Some(t) = var.ty {
+        let declared = registry::reg_type_from_u32(t);
+        if !registry::is_text_type(&declared) {
+            return Err(AppError::Usage(format!(
+                "refusing to import {}: {} is not a string type",
+                var.name,
+                ty_name(&declared)
+            )));
+        }
+    }
+    let current = reg.read_var(Scope::User, &var.name)?;
+    if let Some(v) = &current {
+        guard_text_type(&var.name, &v.ty)?;
+    }
+    let ty = var_import_ty(current.as_ref(), var);
+    Ok(Some(ImportVarState { current, ty }))
+}
+
 /// Count the changes an import would apply, without writing anything.
 /// Mirrors the apply logic below (value and type per item).
 fn import_plan_count(reg: &Registry, data: &ImportFile) -> Result<usize> {
@@ -185,11 +237,10 @@ fn import_plan_count(reg: &Registry, data: &ImportFile) -> Result<usize> {
         }
     }
     for var in &data.variables.user {
-        if var.name.eq_ignore_ascii_case("Path") || valid_var_name(&var.name).is_err() {
+        let Some(state) = var_import_state(reg, var)? else {
             continue;
-        }
-        let current = reg.read_var(Scope::User, &var.name)?;
-        if var_import_changes(current.as_ref(), var) {
+        };
+        if var_import_changes(state.current.as_ref(), var) {
             n += 1;
         }
     }
@@ -239,8 +290,8 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
                 println!(
                     "~ Path [{}] (type {} -> {})",
                     scope.label(),
-                    ty_name(before_ty),
-                    ty_name(write_ty)
+                    ty_name(&before_ty),
+                    ty_name(&write_ty)
                 );
             } else {
                 print_changes(
@@ -266,17 +317,13 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
         return Ok(0);
     }
     for var in &data.variables.user {
-        // Skip entries export would never produce: the reserved `Path` name
-        // (it lives in `path.*`; importing a rogue copy would overwrite the
-        // just-imported user PATH) and names that fail validation.
-        if var.name.eq_ignore_ascii_case("Path") || valid_var_name(&var.name).is_err() {
+        let Some(state) = var_import_state(reg, var)? else {
             continue;
-        }
-        let current = reg.read_var(Scope::User, &var.name)?;
-        let ty = var_import_ty(current.as_ref(), var);
+        };
+        let current = state.current.as_ref();
         if g.dry_run {
-            if var_import_changes(current.as_ref(), var) {
-                let before = current.as_ref().map(|v| v.raw.clone()).unwrap_or_default();
+            if var_import_changes(current, var) {
+                let before = current.map(|v| v.raw.clone()).unwrap_or_default();
                 if g.json {
                     dry_changes.push(serde_json::json!({
                         "scope": "user",
@@ -285,8 +332,8 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
                         "after": [var.value],
                     }));
                 } else if before == var.value {
-                    let old = current.as_ref().map(|v| ty_name(v.ty.clone())).unwrap_or("(unset)".to_string());
-                    println!("~ {} (type {old} -> {})", var.name, ty_name(ty.clone()));
+                    let old = current.map(|v| ty_name(&v.ty)).unwrap_or("(unset)".to_string());
+                    println!("~ {} (type {old} -> {})", var.name, ty_name(&state.ty));
                 } else {
                     print_changes(
                         false,
@@ -297,12 +344,12 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
             }
             continue;
         }
-        if !var_import_changes(current.as_ref(), var) {
+        if !var_import_changes(current, var) {
             continue;
         }
         planned += 1;
         // Delegation cannot happen for user scope, but propagate honestly.
-        if commit_var(reg, g, Scope::User, &var.name, current.as_ref(), Some((&var.value, ty)), "import")? {
+        if commit_var(reg, g, Scope::User, &var.name, current, Some((&var.value, state.ty.clone())), "import")? {
             return Ok(0);
         }
     }

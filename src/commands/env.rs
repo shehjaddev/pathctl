@@ -6,6 +6,7 @@ pub fn env_get(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Result<u
     let value = reg.read_var(scope, name)?;
     match value {
         Some(v) => {
+            guard_text_type(name, &v.ty)?;
             if g.json {
                 println!(
                     "{}",
