@@ -36,27 +36,29 @@ pub fn undo_list(
     Ok(0)
 }
 
-pub fn undo(
-    reg: &Registry,
-    g: &Global,
-    scope_filter: Option<Scope>,
-    kind: Option<SnapshotKind>,
-    to: Option<usize>,
-) -> Result<u8> {
-    let snaps = snapshots_filtered(scope_filter, kind)?;
-    let target: Option<&Snapshot> = match to {
-        Some(i) => Some(
+/// The snapshot `undo` will restore: `--to` picks a 1-based id, otherwise the
+/// newest one matching the filters. `None` means there is nothing to undo.
+fn undo_target(snaps: &[Snapshot], to: Option<usize>) -> Result<Option<&Snapshot>> {
+    match to {
+        Some(i) => Ok(Some(
             i.checked_sub(1)
                 .and_then(|idx| snaps.get(idx))
                 .ok_or_else(|| AppError::Usage(format!("no snapshot {i}")))?,
-        ),
-        None => snaps.last(),
-    };
-    if target.is_none() && g.dry_run {
-        // A dry run previews, even when there is nothing to preview.
-        return Ok(0);
+        )),
+        None => Ok(snaps.last()),
     }
-    let target = target.ok_or_else(|| AppError::NoOp("nothing to undo".into()))?;
+}
+
+/// What a snapshot says the value used to be.
+struct Restore {
+    scope: Scope,
+    name: String,
+    /// The value to write back; empty means it did not exist then.
+    raw: String,
+    ty: RegType,
+}
+
+fn restore_of(target: &Snapshot) -> Result<Restore> {
     let scope = match target.scope.as_str() {
         "system" => Scope::System,
         "user" => Scope::User,
@@ -66,52 +68,82 @@ pub fn undo(
             )));
         }
     };
-    let name = target.name.clone();
-    let restore_raw = target.before.clone();
     let ty = target
         .ty
         .map(registry::reg_type_from_u32)
         .unwrap_or_else(|| {
-            if name == registry::PATH_VALUE {
+            if target.name == registry::PATH_VALUE {
                 registry::default_path_type()
             } else {
                 registry::default_var_type()
             }
         });
+    Ok(Restore {
+        scope,
+        name: target.name.clone(),
+        raw: target.before.clone(),
+        ty,
+    })
+}
 
-    let current = reg.read_var(scope, &name)?;
+/// Put a snapshot's value back, or remove it when it did not exist then.
+fn apply_restore(reg: &Registry, g: &Global, restore: &Restore) -> Result<Committed> {
+    let Restore {
+        scope,
+        name,
+        raw,
+        ty,
+    } = restore;
+    if name == registry::PATH_VALUE {
+        if raw.is_empty() {
+            // The snapshot recorded that the value did not exist, so restore
+            // absence rather than leaving an empty value behind (the variable
+            // branch below does the same).
+            return delete_var_elev(reg, g, *scope, name);
+        }
+        let committed = write_path_elev(reg, g, *scope, raw, ty.clone())?;
+        if committed == Committed::Written {
+            warn_long_path(raw);
+        }
+        return Ok(committed);
+    }
+    if raw.is_empty() {
+        delete_var_elev(reg, g, *scope, name)
+    } else {
+        write_var_elev(reg, g, *scope, name, raw, ty.clone())
+    }
+}
+
+pub fn undo(
+    reg: &Registry,
+    g: &Global,
+    scope_filter: Option<Scope>,
+    kind: Option<SnapshotKind>,
+    to: Option<usize>,
+) -> Result<u8> {
+    let snaps = snapshots_filtered(scope_filter, kind)?;
+    let target = undo_target(&snaps, to)?;
+    if target.is_none() && g.dry_run {
+        // A dry run previews, even when there is nothing to preview.
+        return Ok(0);
+    }
+    let target = target.ok_or_else(|| AppError::NoOp("nothing to undo".into()))?;
+    let restore = restore_of(target)?;
+    let current = reg.read_var(restore.scope, &restore.name)?;
     let before_raw = current.as_ref().map(|v| v.raw.clone()).unwrap_or_default();
 
     if g.dry_run {
         print_changes(
             g.json,
-            &entries_of(&name, &before_raw),
-            &entries_of(&name, &restore_raw),
+            &entries_of(&restore.name, &before_raw),
+            &entries_of(&restore.name, &restore.raw),
         );
         return Ok(0);
     }
     confirm(g, &format!("undo '{}' ({})", target.command, target.ts))?;
-    guard_length(&name, &restore_raw)?;
+    guard_length(&restore.name, &restore.raw)?;
 
-    let committed = if name == registry::PATH_VALUE {
-        if restore_raw.is_empty() {
-            // The snapshot recorded that the value did not exist, so restore
-            // absence rather than leaving an empty value behind (the variable
-            // branch below does the same).
-            delete_var_elev(reg, g, scope, registry::PATH_VALUE)?
-        } else {
-            let committed = write_path_elev(reg, g, scope, &restore_raw, ty)?;
-            if committed == Committed::Written {
-                warn_long_path(&restore_raw);
-            }
-            committed
-        }
-    } else if restore_raw.is_empty() {
-        delete_var_elev(reg, g, scope, &name)?
-    } else {
-        write_var_elev(reg, g, scope, &name, &restore_raw, ty)?
-    };
-    if committed == Committed::Delegated {
+    if apply_restore(reg, g, &restore)? == Committed::Delegated {
         eprintln!("relaunched elevated; verify with list/env get (parent did not write)");
         return Ok(0);
     }
@@ -122,10 +154,10 @@ pub fn undo(
     // pre-undo state stays recoverable from the undone snapshot's `before`,
     // so crash-safety is unchanged.
     journal(
-        scope,
-        &name,
+        restore.scope,
+        &restore.name,
         &before_raw,
-        &restore_raw,
+        &restore.raw,
         &format!("undo of {}", target.ts),
         current.as_ref().map(|v| v.ty.clone()),
     )?;
@@ -134,12 +166,12 @@ pub fn undo(
     }
     report_mutation(
         g,
-        scope,
-        &name,
+        restore.scope,
+        &restore.name,
         "undo",
         &before_raw,
-        &restore_raw,
-        &format!("restored {name} ({})", target.command),
+        &restore.raw,
+        &format!("restored {} ({})", restore.name, target.command),
     );
     Ok(0)
 }
