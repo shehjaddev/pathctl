@@ -3,40 +3,79 @@
 use super::env::valid_var_name;
 use super::*;
 
+use serde::Deserialize;
 use std::fs;
 use std::io::Write;
 use std::path::Component;
 
-#[derive(Serialize)]
-struct ExportFile {
-    tool: &'static str,
-    version: u32,
-    path: ExportPath,
-    variables: ExportVars,
-}
+/// Version of the export format this build writes and understands.
+const EXPORT_VERSION: u32 = 1;
 
-#[derive(Serialize)]
-struct ExportPath {
-    user: Option<ExportValue>,
-    system: Option<ExportValue>,
-}
-
-#[derive(Serialize)]
-struct ExportVars {
-    user: Vec<ExportVar>,
-}
-
-#[derive(Serialize)]
-struct ExportValue {
+/// One value in a backup: the text and its registry type.
+#[derive(Serialize, Deserialize)]
+struct BackupValue {
     value: String,
-    ty: u32,
+    /// Optional on read: a hand-written file need not name a type.
+    ty: Option<u32>,
 }
 
-#[derive(Serialize)]
-struct ExportVar {
+/// One environment variable in a backup.
+#[derive(Serialize, Deserialize)]
+struct BackupVar {
     name: String,
     value: String,
-    ty: u32,
+    ty: Option<u32>,
+}
+
+/// The PATH of each scope; `None` means that scope is not in this backup.
+#[derive(Serialize, Deserialize, Default)]
+struct BackupPath {
+    user: Option<BackupValue>,
+    system: Option<BackupValue>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct BackupVars {
+    #[serde(default)]
+    user: Vec<BackupVar>,
+}
+
+/// A backup file: what `export` writes and what `import` accepts. One set of
+/// types serves both directions, so the two can never drift apart.
+#[derive(Serialize, Deserialize)]
+struct BackupFile {
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
+    version: Option<u32>,
+    #[serde(default)]
+    path: BackupPath,
+    #[serde(default)]
+    variables: BackupVars,
+}
+
+impl BackupFile {
+    /// Refuse a file this build cannot be sure it understands. `tool` and
+    /// `version` stay optional so a hand-written file with only
+    /// `path`/`variables` still imports, but a file that names another tool or
+    /// a newer format is rejected instead of half-applied.
+    fn check_origin(&self) -> Result<()> {
+        if let Some(tool) = &self.tool
+            && tool != "pathctl"
+        {
+            return Err(AppError::Usage(format!(
+                "refusing to import: file was written by '{tool}', not pathctl"
+            )));
+        }
+        if let Some(v) = self.version
+            && v > EXPORT_VERSION
+        {
+            return Err(AppError::Usage(format!(
+                "refusing to import: file uses export format {v}, this build understands {EXPORT_VERSION}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Write a file in one step: temp file next to the target, fsync, then rename.
@@ -85,16 +124,16 @@ fn check_output_path(path: &std::path::Path) -> Result<()> {
 }
 
 pub fn export(reg: &Registry, scopes: &[Scope], output: Option<&std::path::Path>) -> Result<u8> {
-    let read = |scope: Scope| -> Result<Option<ExportValue>> {
+    let read = |scope: Scope| -> Result<Option<BackupValue>> {
         if !scopes.contains(&scope) {
             return Ok(None);
         }
         match reg.read_path(scope)? {
             Some(v) => {
                 guard_text_type(registry::PATH_VALUE, &v.ty)?;
-                Ok(Some(ExportValue {
+                Ok(Some(BackupValue {
                     value: v.raw,
-                    ty: registry::reg_type_to_u32(v.ty),
+                    ty: Some(registry::reg_type_to_u32(v.ty)),
                 }))
             }
             None => Ok(None),
@@ -116,10 +155,10 @@ pub fn export(reg: &Registry, scopes: &[Scope], output: Option<&std::path::Path>
                 skipped.push(format!("{name} ({})", ty_name(&v.ty)));
                 continue;
             }
-            vars.push(ExportVar {
+            vars.push(BackupVar {
                 name,
                 value: v.raw,
-                ty: registry::reg_type_to_u32(v.ty),
+                ty: Some(registry::reg_type_to_u32(v.ty)),
             });
         }
     }
@@ -130,14 +169,14 @@ pub fn export(reg: &Registry, scopes: &[Scope], output: Option<&std::path::Path>
             skipped.join(", ")
         );
     }
-    let file = ExportFile {
-        tool: "pathctl",
-        version: EXPORT_VERSION,
-        path: ExportPath {
+    let file = BackupFile {
+        tool: Some("pathctl".to_string()),
+        version: Some(EXPORT_VERSION),
+        path: BackupPath {
             user: read(Scope::User)?,
             system: read(Scope::System)?,
         },
-        variables: ExportVars { user: vars },
+        variables: BackupVars { user: vars },
     };
     let json = serde_json::to_string_pretty(&file).map_err(|e| AppError::Other(e.to_string()))?;
     match output {
@@ -151,75 +190,11 @@ pub fn export(reg: &Registry, scopes: &[Scope], output: Option<&std::path::Path>
     Ok(0)
 }
 
-/// Version of the export format this build writes and understands.
-const EXPORT_VERSION: u32 = 1;
-
-#[derive(serde::Deserialize)]
-struct ImportFile {
-    #[serde(default)]
-    tool: Option<String>,
-    #[serde(default)]
-    version: Option<u32>,
-    #[serde(default)]
-    path: ImportPath,
-    #[serde(default)]
-    variables: ImportVars,
-}
-
-impl ImportFile {
-    /// Refuse a file this build cannot be sure it understands. `tool` and
-    /// `version` stay optional so a hand-written file with only
-    /// `path`/`variables` still imports, but a file that names another tool or
-    /// a newer format is rejected instead of half-applied.
-    fn check_origin(&self) -> Result<()> {
-        if let Some(tool) = &self.tool
-            && tool != "pathctl"
-        {
-            return Err(AppError::Usage(format!(
-                "refusing to import: file was written by '{tool}', not pathctl"
-            )));
-        }
-        if let Some(v) = self.version
-            && v > EXPORT_VERSION
-        {
-            return Err(AppError::Usage(format!(
-                "refusing to import: file uses export format {v}, this build understands {EXPORT_VERSION}"
-            )));
-        }
-        Ok(())
-    }
-}
-
-#[derive(serde::Deserialize, Default)]
-struct ImportPath {
-    user: Option<ImportValue>,
-    system: Option<ImportValue>,
-}
-
-#[derive(serde::Deserialize, Default)]
-struct ImportVars {
-    #[serde(default)]
-    user: Vec<ImportVar>,
-}
-
-#[derive(serde::Deserialize)]
-struct ImportValue {
-    value: String,
-    ty: Option<u32>,
-}
-
-#[derive(serde::Deserialize)]
-struct ImportVar {
-    name: String,
-    value: String,
-    ty: Option<u32>,
-}
-
 /// Current state plus target type for an imported PATH value.
 fn path_import_state(
     reg: &Registry,
     scope: Scope,
-    value: &ImportValue,
+    value: &BackupValue,
 ) -> Result<(String, RegType, RegType)> {
     let (before_raw, before_ty) = current_path(reg, scope)?;
     guard_text_type(registry::PATH_VALUE, &before_ty)?;
@@ -268,7 +243,7 @@ fn import_var_doc(name: &str, before: &str, after: &str) -> serde_json::Value {
 
 /// Would importing `var` change anything? Mirrors `env set` conventions:
 /// an unset variable with an empty value is a no-op.
-fn var_import_changes(current: Option<&PathValue>, var: &ImportVar) -> bool {
+fn var_import_changes(current: Option<&PathValue>, var: &BackupVar) -> bool {
     let before_raw = current.map(|v| v.raw.as_str()).unwrap_or("");
     if before_raw != var.value.as_str() {
         return true;
@@ -282,7 +257,7 @@ fn var_import_changes(current: Option<&PathValue>, var: &ImportVar) -> bool {
 }
 
 /// Target type for an imported variable (file type, else keep, else default).
-fn var_import_ty(current: Option<&PathValue>, var: &ImportVar) -> RegType {
+fn var_import_ty(current: Option<&PathValue>, var: &BackupVar) -> RegType {
     var.ty
         .map(registry::reg_type_from_u32)
         .or_else(|| current.map(|v| v.ty.clone()))
@@ -291,7 +266,7 @@ fn var_import_ty(current: Option<&PathValue>, var: &ImportVar) -> RegType {
 
 /// What an imported variable would need: the value it currently holds and the
 /// type to write. `None` means the entry must be skipped.
-struct ImportVarState {
+struct BackupVarState {
     current: Option<PathValue>,
     ty: RegType,
 }
@@ -299,7 +274,7 @@ struct ImportVarState {
 /// Validate and read one import entry. Skips what export never produces (the
 /// reserved `Path` name, invalid names) and refuses what the format cannot
 /// carry (non-string types), so the plan and the apply pass cannot disagree.
-fn var_import_state(reg: &Registry, var: &ImportVar) -> Result<Option<ImportVarState>> {
+fn var_import_state(reg: &Registry, var: &BackupVar) -> Result<Option<BackupVarState>> {
     if var.name.eq_ignore_ascii_case(registry::PATH_VALUE) || valid_var_name(&var.name).is_err() {
         return Ok(None);
     }
@@ -318,12 +293,12 @@ fn var_import_state(reg: &Registry, var: &ImportVar) -> Result<Option<ImportVarS
         guard_text_type(&var.name, &v.ty)?;
     }
     let ty = var_import_ty(current.as_ref(), var);
-    Ok(Some(ImportVarState { current, ty }))
+    Ok(Some(BackupVarState { current, ty }))
 }
 
 /// Count the changes an import would apply, without writing anything.
 /// Mirrors the apply logic below (value and type per item).
-fn import_plan_count(reg: &Registry, scopes: &[Scope], data: &ImportFile) -> Result<usize> {
+fn import_plan_count(reg: &Registry, scopes: &[Scope], data: &BackupFile) -> Result<usize> {
     let mut n = 0;
     for (scope, value) in [
         (Scope::User, data.path.user.as_ref()),
@@ -357,7 +332,7 @@ fn import_plan_count(reg: &Registry, scopes: &[Scope], data: &ImportFile) -> Res
 pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Path) -> Result<u8> {
     let text = std::fs::read_to_string(file)
         .map_err(|e| AppError::Usage(format!("cannot read {}: {e}", file.display())))?;
-    let data: ImportFile = serde_json::from_str(&text)
+    let data: BackupFile = serde_json::from_str(&text)
         .map_err(|e| AppError::Usage(format!("invalid export JSON: {e}")))?;
     data.check_origin()?;
 
@@ -380,7 +355,7 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
     // Per-item reports accumulate so stdout stays a single JSON document: the
     // dry run prints them as an array, the apply pass reports what it changed.
     let mut item_docs: Vec<serde_json::Value> = Vec::new();
-    let mut apply_path = |scope: Scope, value: &ImportValue| -> Result<Committed> {
+    let mut apply_path = |scope: Scope, value: &BackupValue| -> Result<Committed> {
         let (before_raw, before_ty, write_ty) = path_import_state(reg, scope, value)?;
         if before_raw == value.value && before_ty == write_ty {
             return Ok(Committed::Written);
@@ -445,7 +420,7 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
         return Ok(0);
     }
     // Variable entries are user-scope only; `--scope system` skips them.
-    let vars: &[ImportVar] = if scopes.contains(&Scope::User) {
+    let vars: &[BackupVar] = if scopes.contains(&Scope::User) {
         &data.variables.user
     } else {
         &[]
