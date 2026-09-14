@@ -135,7 +135,7 @@ pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
                     scope.label()
                 ));
             }
-            if entry.chars().count() > util::LONG_PATH_FLAG {
+            if util::utf16_len(entry) > util::LONG_PATH_FLAG {
                 findings.push(format!(
                     "[{}] entry longer than {} characters: {entry}",
                     scope.label(),
@@ -147,7 +147,7 @@ pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
     // Near-limit warning for the combined value per scope.
     for (scope, value) in &values {
         if let Some(v) = value {
-            let units = v.raw.encode_utf16().count();
+            let units = util::utf16_len(&v.raw);
             if units > util::MAX_ENV_VALUE {
                 findings.push(format!(
                     "[{}] PATH exceeds the {} character limit!",

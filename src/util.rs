@@ -12,6 +12,13 @@ pub const WARN_PATH_LEN: usize = 2_048;
 /// PATH entry length worth surfacing by `check` (long-path support varies).
 pub const LONG_PATH_FLAG: usize = 260;
 
+/// Length in UTF-16 code units: what the registry stores, and what Windows
+/// counts against its environment-variable limit. Every length limit in
+/// pathctl is measured this way, so the numbers agree with each other.
+pub fn utf16_len(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
 /// Expand `%VAR%` references via ExpandEnvironmentStringsW. Returns the input
 /// unchanged if expansion fails (unresolvable or overlong result).
 pub fn expand(s: &str) -> String {

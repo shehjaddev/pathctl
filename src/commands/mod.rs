@@ -226,10 +226,10 @@ fn report_mutation(
     println!("{}", serde_json::to_string(&out).expect("serialize"));
 }
 
-/// Refuse writes that would exceed the 32,767-char environment-variable limit
-/// (spec §4). Counted in UTF-16 units, matching the registry's storage.
+/// Refuse writes that would exceed the 32,767-unit environment-variable
+/// limit, counted in UTF-16 units like the registry itself.
 fn guard_length(name: &str, value: &str) -> Result<()> {
-    let units = value.encode_utf16().count();
+    let units = util::utf16_len(value);
     if units > util::MAX_ENV_VALUE {
         return Err(AppError::Usage(format!(
             "refusing write: {name} is {units} characters, above the {} environment-variable limit",
@@ -240,7 +240,7 @@ fn guard_length(name: &str, value: &str) -> Result<()> {
 }
 
 fn warn_long_path(value: &str) {
-    let len = value.chars().count();
+    let len = util::utf16_len(value);
     if len >= util::WARN_PATH_LEN {
         eprintln!(
             "warning: combined PATH is {len} characters (approaching the ~2,048 practical limit)"
