@@ -1135,6 +1135,34 @@ fn export_excludes_path_from_variables() {
 }
 
 #[test]
+fn export_to_a_file_is_atomic() {
+    let dir = setup("export_atomic");
+    let entry = r"C:\pathctl-ea";
+    pathctl("export_atomic", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
+    let out_file = dir.path().join("backup.json");
+    pathctl("export_atomic", dir.path())
+        .arg("export")
+        .arg("--output")
+        .arg(&out_file)
+        .assert()
+        .success();
+    // The backup is complete and its temp file is gone.
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&out_file).unwrap()).expect("valid JSON");
+    assert!(v["path"]["user"]["value"].as_str().unwrap().contains(entry));
+    let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "export left temp files: {leftovers:?}");
+}
+
+#[test]
 fn export_refuses_non_windows_output_path() {
     let dir = setup("export_posix");
     pathctl("export_posix", dir.path())

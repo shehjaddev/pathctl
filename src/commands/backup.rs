@@ -3,6 +3,9 @@
 use super::env::valid_var_name;
 use super::*;
 
+use std::fs;
+use std::io::Write;
+
 #[derive(Serialize)]
 struct ExportFile {
     tool: &'static str,
@@ -33,6 +36,27 @@ struct ExportVar {
     name: String,
     value: String,
     ty: u32,
+}
+
+/// Write a file in one step: temp file next to the target, fsync, then rename.
+/// A crash mid-write must not leave a half-written backup behind, which is the
+/// same guarantee the snapshot store gives.
+fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other("output path has no file name"))?;
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => std::path::Path::new("."),
+    };
+    let tmp = dir.join(format!("{}.{}.tmp", name.to_string_lossy(), std::process::id()));
+    let mut file = fs::File::create(&tmp)?;
+    if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    drop(file);
+    fs::rename(&tmp, path)
 }
 
 /// Refuse POSIX/MSYS-style output paths: on Windows a leading `/` means
@@ -107,8 +131,9 @@ pub fn export(reg: &Registry, scopes: &[Scope], output: Option<&std::path::Path>
     match output {
         Some(path) => {
             check_output_path(path)?;
-            std::fs::write(path, json)
-                .map_err(|e| AppError::Other(format!("could not write {}: {e}", path.display())))?;
+            write_atomic(path, json.as_bytes()).map_err(|e| {
+                AppError::Other(format!("could not write {}: {e}", path.display()))
+            })?;
         }
         None => println!("{json}"),
     }
