@@ -1532,106 +1532,62 @@ fn list_raw_validates_resolved_entries() {
         .stdout(predicate::str::contains("[%!]"));
 }
 
-#[test]
-#[ignore = "requires PATHCTL_TEST_REAL_SYSTEM=1 and an elevated shell (writes HKLM environment)"]
-fn system_scope_gated() {
-    if std::env::var_os("PATHCTL_TEST_REAL_SYSTEM").is_none() {
-        eprintln!("skipped: PATHCTL_TEST_REAL_SYSTEM not set");
-        return;
+/// Command for the opt-in smoke tests: an isolated snapshot dir, confirmation
+/// skipped, broadcasts off, and optionally a scope flag.
+fn gated_cmd(snap: &Path, scope: Option<&str>) -> Command {
+    let mut cmd = Command::cargo_bin("pathctl").unwrap();
+    cmd.env("PATHCTL_SNAPSHOT_DIR", snap)
+        .arg("--no-broadcast")
+        .arg("-y");
+    if let Some(scope) = scope {
+        cmd.arg("--scope").arg(scope);
     }
-    fn sys(snap: &Path) -> Command {
-        let mut cmd = Command::cargo_bin("pathctl").unwrap();
-        cmd.env("PATHCTL_SNAPSHOT_DIR", snap)
-            .arg("--no-broadcast")
-            .arg("-y")
-            .arg("--scope")
-            .arg("system");
-        cmd
-    }
-    let name = "PATHCTL_SYSTEM_SMOKE";
+    cmd
+}
+
+/// Body shared by the two opt-in smoke tests: set a uniquely named variable,
+/// read it back, undo, and check the previous state returned. Both write to the
+/// real environment, so they fail loudly when their gate is not set rather than
+/// reporting success without doing anything.
+fn real_env_smoke(env_var: &str, scope: Option<&str>, name: &str) {
+    assert!(
+        std::env::var_os(env_var).is_some(),
+        "{env_var} must be set to run this test (see the README); it writes the real \
+         environment, so it refuses to run half-enabled"
+    );
     let snap = tempfile::tempdir().unwrap();
-    // best-effort cleanup of a stale variable from a previous failed run
-    let _ = sys(snap.path()).arg("env").arg("delete").arg(name).output();
-    let before = sys(snap.path())
-        .arg("env")
-        .arg("get")
-        .arg(name)
-        .output()
-        .unwrap();
+    let cmd = |args: &[&str]| {
+        let mut c = gated_cmd(snap.path(), scope);
+        c.args(args);
+        c
+    };
+    // Best-effort cleanup of a stale variable left by an earlier failed run.
+    let _ = cmd(&["env", "delete", name]).output();
+    let before = cmd(&["env", "get", name]).output().unwrap();
     let before_value = stdout(&before);
-    sys(snap.path())
-        .arg("env")
-        .arg("set")
-        .arg(name)
-        .arg("smoke-1")
-        .assert()
-        .success();
-    sys(snap.path())
-        .arg("env")
-        .arg("get")
-        .arg(name)
+    cmd(&["env", "set", name, "smoke-1"]).assert().success();
+    cmd(&["env", "get", name])
         .assert()
         .success()
         .stdout("smoke-1\n");
-    sys(snap.path()).arg("undo").assert().success();
+    cmd(&["undo"]).assert().success();
     if before_value.is_empty() {
-        sys(snap.path())
-            .arg("env")
-            .arg("get")
-            .arg(name)
-            .assert()
-            .code(4);
+        cmd(&["env", "get", name]).assert().code(4);
     }
 }
 
-// ---------------------------------------------------------------------------
-// Real-path smoke test (opt-in; never runs in CI)
-// ---------------------------------------------------------------------------
+#[test]
+#[ignore = "requires PATHCTL_TEST_REAL_SYSTEM=1 and an elevated shell (writes HKLM environment)"]
+fn system_scope_gated() {
+    real_env_smoke(
+        "PATHCTL_TEST_REAL_SYSTEM",
+        Some("system"),
+        "PATHCTL_SYSTEM_SMOKE",
+    );
+}
 
 #[test]
 #[ignore = "requires PATHCTL_TEST_REAL=1 and writes the real user PATH"]
 fn real_path_gated() {
-    if std::env::var_os("PATHCTL_TEST_REAL").is_none() {
-        eprintln!("skipped: PATHCTL_TEST_REAL not set");
-        return;
-    }
-    fn real(snap: &Path) -> Command {
-        let mut cmd = Command::cargo_bin("pathctl").unwrap();
-        cmd.env("PATHCTL_SNAPSHOT_DIR", snap)
-            .arg("--no-broadcast")
-            .arg("-y");
-        cmd
-    }
-    let name = "PATHCTL_REAL_SMOKE";
-    let snap = tempfile::tempdir().unwrap();
-    let before = real(snap.path())
-        .arg("env")
-        .arg("get")
-        .arg(name)
-        .output()
-        .unwrap();
-    let before_value = stdout(&before);
-    real(snap.path())
-        .arg("env")
-        .arg("set")
-        .arg(name)
-        .arg("smoke-1")
-        .assert()
-        .success();
-    real(snap.path())
-        .arg("env")
-        .arg("get")
-        .arg(name)
-        .assert()
-        .success()
-        .stdout("smoke-1\n");
-    real(snap.path()).arg("undo").assert().success();
-    if before_value.is_empty() {
-        real(snap.path())
-            .arg("env")
-            .arg("get")
-            .arg(name)
-            .assert()
-            .code(4);
-    }
+    real_env_smoke("PATHCTL_TEST_REAL", None, "PATHCTL_REAL_SMOKE");
 }
