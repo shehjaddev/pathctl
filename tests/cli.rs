@@ -1104,6 +1104,39 @@ fn export_import_roundtrip() {
 }
 
 #[test]
+fn import_refuses_files_from_another_tool_or_newer_format() {
+    let dir = setup("import_origin");
+    let vars = serde_json::json!({
+        "user": [{ "name": "PATHCTL_ORIGIN", "value": "v", "ty": 1 }]
+    });
+    for (file, doc) in [
+        (
+            "foreign.json",
+            serde_json::json!({ "tool": "setx-clone", "version": 1, "variables": vars }),
+        ),
+        (
+            "future.json",
+            serde_json::json!({ "tool": "pathctl", "version": 99, "variables": vars }),
+        ),
+    ] {
+        let path = dir.path().join(file);
+        std::fs::write(&path, serde_json::to_string(&doc).unwrap()).unwrap();
+        pathctl("import_origin", dir.path())
+            .arg("import")
+            .arg(&path)
+            .assert()
+            .code(2);
+    }
+    // Neither file was applied.
+    pathctl("import_origin", dir.path())
+        .arg("env")
+        .arg("get")
+        .arg("PATHCTL_ORIGIN")
+        .assert()
+        .code(4);
+}
+
+#[test]
 fn export_excludes_path_from_variables() {
     let dir = setup("export_dedupe");
     let entry = r"C:\pathctl-ed";

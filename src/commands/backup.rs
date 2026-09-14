@@ -120,7 +120,7 @@ pub fn export(reg: &Registry, scopes: &[Scope], output: Option<&std::path::Path>
     }
     let file = ExportFile {
         tool: "pathctl",
-        version: 1,
+        version: EXPORT_VERSION,
         path: ExportPath {
             user: read(Scope::User)?,
             system: read(Scope::System)?,
@@ -140,12 +140,43 @@ pub fn export(reg: &Registry, scopes: &[Scope], output: Option<&std::path::Path>
     Ok(0)
 }
 
+/// Version of the export format this build writes and understands.
+const EXPORT_VERSION: u32 = 1;
+
 #[derive(serde::Deserialize)]
 struct ImportFile {
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
+    version: Option<u32>,
     #[serde(default)]
     path: ImportPath,
     #[serde(default)]
     variables: ImportVars,
+}
+
+impl ImportFile {
+    /// Refuse a file this build cannot be sure it understands. `tool` and
+    /// `version` stay optional so a hand-written file with only
+    /// `path`/`variables` still imports, but a file that names another tool or
+    /// a newer format is rejected instead of half-applied.
+    fn check_origin(&self) -> Result<()> {
+        if let Some(tool) = &self.tool
+            && tool != "pathctl"
+        {
+            return Err(AppError::Usage(format!(
+                "refusing to import: file was written by '{tool}', not pathctl"
+            )));
+        }
+        if let Some(v) = self.version
+            && v > EXPORT_VERSION
+        {
+            return Err(AppError::Usage(format!(
+                "refusing to import: file uses export format {v}, this build understands {EXPORT_VERSION}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -317,6 +348,7 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
         .map_err(|e| AppError::Usage(format!("cannot read {}: {e}", file.display())))?;
     let data: ImportFile =
         serde_json::from_str(&text).map_err(|e| AppError::Usage(format!("invalid export JSON: {e}")))?;
+    data.check_origin()?;
 
     // Read-only plan first: it validates the whole file (value types included)
     // and tells us whether a real run would have anything to do.
