@@ -116,7 +116,9 @@ fn save_at(dir: &Path, s: &Snapshot) -> io::Result<PathBuf> {
         // but bumping is simpler and still sorts correctly.
         owned.ts = owned.ts.saturating_add(1);
     }
-    Err(io::Error::other("snapshot timestamp collision: retries exhausted"))
+    Err(io::Error::other(
+        "snapshot timestamp collision: retries exhausted",
+    ))
 }
 
 /// A leftover temp file is only removed once it is older than this: a young one
@@ -145,8 +147,7 @@ pub fn list() -> io::Result<Vec<Snapshot>> {
 }
 
 fn list_at(dir: &Path) -> io::Result<Vec<Snapshot>> {
-    list_with_paths(dir)
-        .map(|v| v.into_iter().map(|(s, _)| s).collect())
+    list_with_paths(dir).map(|v| v.into_iter().map(|(s, _)| s).collect())
 }
 
 fn list_with_paths(dir: &Path) -> io::Result<Vec<(Snapshot, PathBuf)>> {
@@ -165,10 +166,7 @@ fn list_with_paths(dir: &Path) -> io::Result<Vec<(Snapshot, PathBuf)>> {
         match fs::read_to_string(&path) {
             Ok(text) => match serde_json::from_str::<Snapshot>(&text) {
                 Ok(s) => out.push((s, path)),
-                Err(e) => eprintln!(
-                    "warning: ignoring corrupt snapshot {}: {e}",
-                    path.display()
-                ),
+                Err(e) => eprintln!("warning: ignoring corrupt snapshot {}: {e}", path.display()),
             },
             Err(e) => eprintln!(
                 "warning: ignoring unreadable snapshot {}: {e}",
@@ -246,7 +244,9 @@ mod tests {
         ));
         assert!(stale_tmp("not-a-timestamp.json.tmp", now));
 
-        let fresh = dir.path().join(format!("{now}.{}.json.tmp", std::process::id()));
+        let fresh = dir
+            .path()
+            .join(format!("{now}.{}.json.tmp", std::process::id()));
         let stale = dir
             .path()
             .join(format!("{}.1.json.tmp", now - STALE_TMP_NANOS - 1));

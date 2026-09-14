@@ -2,7 +2,11 @@
 
 use super::*;
 
-pub fn undo_list(g: &Global, scope_filter: Option<Scope>, kind: Option<SnapshotKind>) -> Result<u8> {
+pub fn undo_list(
+    g: &Global,
+    scope_filter: Option<Scope>,
+    kind: Option<SnapshotKind>,
+) -> Result<u8> {
     let snaps = snapshots_filtered(scope_filter, kind)?;
     if g.json {
         println!("{}", serde_json::to_string(&snaps).expect("serialize"));
@@ -16,8 +20,16 @@ pub fn undo_list(g: &Global, scope_filter: Option<Scope>, kind: Option<SnapshotK
                 s.scope,
                 s.name,
                 s.command,
-                if s.before.is_empty() { "(none)" } else { &s.before },
-                if s.after.is_empty() { "(none)" } else { &s.after },
+                if s.before.is_empty() {
+                    "(none)"
+                } else {
+                    &s.before
+                },
+                if s.after.is_empty() {
+                    "(none)"
+                } else {
+                    &s.after
+                },
             );
         }
     }

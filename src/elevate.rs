@@ -28,10 +28,7 @@ fn quote_arg(s: &OsStr) -> Vec<u16> {
         match u {
             u if u == u16::from(b'\\') => backslashes += 1,
             u if u == u16::from(b'"') => {
-                out.extend(std::iter::repeat_n(
-                    u16::from(b'\\'),
-                    backslashes * 2 + 1,
-                ));
+                out.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes * 2 + 1));
                 out.push(u16::from(b'"'));
                 backslashes = 0;
             }
@@ -147,7 +144,10 @@ mod tests {
     #[test]
     fn embedded_quotes_are_escaped() {
         assert_eq!(quote_arg(OsStr::new(r#"a"b"#)), wide(r#""a\"b""#));
-        assert_eq!(quote_arg(OsStr::new(r#"say "hi""#)), wide(r#""say \"hi\"""#));
+        assert_eq!(
+            quote_arg(OsStr::new(r#"say "hi""#)),
+            wide(r#""say \"hi\"""#)
+        );
     }
 
     #[test]

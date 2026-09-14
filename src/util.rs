@@ -33,9 +33,7 @@ pub fn expand(s: &str) -> String {
     // this, and a 64 KiB heap buffer per entry showed up as allocation churn
     // across `list`/`check` on a real PATH.
     let mut buf = [0u16; 512];
-    let n = unsafe {
-        ExpandEnvironmentStringsW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32)
-    };
+    let n = unsafe { ExpandEnvironmentStringsW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
     // n is the size required including the NUL. n == 0 means expansion failed;
     // n > buf.len() means the result did not fit, and slicing buf[..n-1] there
     // would panic. An overlong result keeps the input, matching the documented
@@ -51,9 +49,8 @@ pub fn expand(s: &str) -> String {
         return String::from_utf16_lossy(&buf[..need - 1]);
     }
     let mut retry = vec![0u16; need];
-    let n = unsafe {
-        ExpandEnvironmentStringsW(wide.as_ptr(), retry.as_mut_ptr(), retry.len() as u32)
-    };
+    let n =
+        unsafe { ExpandEnvironmentStringsW(wide.as_ptr(), retry.as_mut_ptr(), retry.len() as u32) };
     if n == 0 || (n as usize) > retry.len() {
         return s.to_string();
     }
@@ -112,10 +109,7 @@ mod tests {
         let big = "x".repeat(2_000);
         unsafe { std::env::set_var("PATHCTL_EXPAND_BIG", &big) };
         assert_eq!(expand("%PATHCTL_EXPAND_BIG%"), big);
-        assert_eq!(
-            expand(r"%PATHCTL_EXPAND_BIG%\tail"),
-            format!("{big}\\tail")
-        );
+        assert_eq!(expand(r"%PATHCTL_EXPAND_BIG%\tail"), format!("{big}\\tail"));
     }
 
     #[test]

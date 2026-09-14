@@ -2,7 +2,7 @@
 //! registry environment changes immediately.
 
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+    HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
 };
 
 /// Broadcast `WM_SETTINGCHANGE` with `lParam = "Environment"`. Best-effort:

@@ -160,7 +160,11 @@ fn run(cli: Cli, g: Global, reg: &Registry) -> Result<u8> {
             let scopes = read_scopes(true)?;
             commands::check(reg, &g, &scopes)
         }
-        Cmd::Add { dir, prepend, dedupe } => {
+        Cmd::Add {
+            dir,
+            prepend,
+            dedupe,
+        } => {
             let scope = commands::mutation_scope(cli.scope.as_deref())?;
             commands::add(reg, &g, scope, dir, *prepend, *dedupe)
         }

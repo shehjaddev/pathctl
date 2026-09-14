@@ -8,18 +8,13 @@
 //! Shared plumbing lives here; each command family has its own submodule.
 
 use crate::notify;
-
 use crate::pathops::{self, Change};
-
 use crate::registry::{self, PathValue, RegType, Registry, Scope};
-
 use crate::snapshot::{self, Snapshot};
-
 use crate::util;
-
 use serde::Serialize;
-
 use std::io;
+
 /// Command failures, each mapped to one documented exit code:
 /// 2 usage, 3 elevation required, 4 no-op, 5 registry I/O, 6 anything else.
 /// Exit 1 is reserved for `check`/`diff`, which report findings rather than
@@ -272,12 +267,7 @@ fn confirm(g: &Global, action: &str) -> Result<()> {
 ///
 /// Returns `Ok(true)` when the change was delegated to an elevated child
 /// (parent must not claim success); `Ok(false)` when written directly.
-fn write_error_to_app(
-    g: &Global,
-    scope: Scope,
-    e: io::Error,
-    elevate_msg: &str,
-) -> Result<bool> {
+fn write_error_to_app(g: &Global, scope: Scope, e: io::Error, elevate_msg: &str) -> Result<bool> {
     if scope == Scope::System && e.kind() == io::ErrorKind::PermissionDenied {
         if g.elevate {
             crate::elevate::relaunch_elevated()
@@ -434,7 +424,11 @@ fn commit(
             // Delegated to an elevated child: it journals itself, so drop our
             // premature snapshot rather than leave a phantom entry behind.
             let _ = std::fs::remove_file(&snap_path);
-            let verify = if name == "Path" { "list/check" } else { "env get" };
+            let verify = if name == "Path" {
+                "list/check"
+            } else {
+                "env get"
+            };
             eprintln!("relaunched elevated; verify with {verify} (parent did not write)");
             return Ok(Committed::Delegated);
         }
@@ -514,7 +508,11 @@ mod tests {
         let g = Global::default();
         let e = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
         let err = write_error_to_app(&g, Scope::System, e, "elevate me").unwrap_err();
-        assert_eq!(err.exit_code(), 3, "README contract: exit 3 = elevation required");
+        assert_eq!(
+            err.exit_code(),
+            3,
+            "README contract: exit 3 = elevation required"
+        );
         assert!(matches!(err, AppError::ElevationRequired(_)));
     }
 
@@ -522,7 +520,10 @@ mod tests {
     fn user_scope_denied_is_registry_error_not_exit_3() {
         // Elevation never applies to user scope, even with --elevate (which
         // would otherwise relaunch -- this proves the branch is scope-gated).
-        let g = Global { elevate: true, ..Global::default() };
+        let g = Global {
+            elevate: true,
+            ..Global::default()
+        };
         let e = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
         let err = write_error_to_app(&g, Scope::User, e, "elevate me").unwrap_err();
         assert_eq!(err.exit_code(), 5);
@@ -542,11 +543,19 @@ mod tests {
     fn delete_var_elev_wraps_registry_delete() {
         let key = registry::TestKeyGuard::new("delete-var-elev");
         let reg = key.registry();
-        reg.write_var(Scope::User, "PATHCTL_DEL_TEST", "x", registry::default_var_type())
-            .unwrap();
+        reg.write_var(
+            Scope::User,
+            "PATHCTL_DEL_TEST",
+            "x",
+            registry::default_var_type(),
+        )
+        .unwrap();
         let g = Global::default();
         assert!(!delete_var_elev(&reg, &g, Scope::User, "PATHCTL_DEL_TEST").unwrap());
-        assert!(reg.read_var(Scope::User, "PATHCTL_DEL_TEST").unwrap().is_none());
+        assert!(
+            reg.read_var(Scope::User, "PATHCTL_DEL_TEST")
+                .unwrap()
+                .is_none()
+        );
     }
-
 }

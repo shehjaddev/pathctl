@@ -46,7 +46,15 @@ pub fn add(
     {
         return Ok(0);
     }
-    report_mutation(g, scope, "Path", "add", &before_raw, &after_raw, &format!("added: {entry}"));
+    report_mutation(
+        g,
+        scope,
+        "Path",
+        "add",
+        &before_raw,
+        &after_raw,
+        &format!("added: {entry}"),
+    );
     Ok(0)
 }
 
@@ -67,10 +75,7 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
     } else if let Some(pos) = entries.iter().position(|e| pathops::eq(e, target)) {
         Some(entries.remove(pos))
     } else if let Some(idx) = parse_index(target) {
-        Some(
-            pathops::remove_index(&mut entries, idx)
-                .map_err(|e| AppError::Usage(e.to_string()))?,
-        )
+        Some(pathops::remove_index(&mut entries, idx).map_err(|e| AppError::Usage(e.to_string()))?)
     } else {
         None
     };
@@ -138,7 +143,10 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         "dedupe",
         &before_raw,
         &after_raw,
-        &format!("deduped: removed {} duplicate(s)", before.len() - after.len()),
+        &format!(
+            "deduped: removed {} duplicate(s)",
+            before.len() - after.len()
+        ),
     );
     Ok(0)
 }
@@ -189,17 +197,10 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
     Ok(0)
 }
 
-pub fn move_entry(
-    reg: &Registry,
-    g: &Global,
-    scope: Scope,
-    from: usize,
-    to: usize,
-) -> Result<u8> {
+pub fn move_entry(reg: &Registry, g: &Global, scope: Scope, from: usize, to: usize) -> Result<u8> {
     let (before_raw, before_ty) = current_path(reg, scope)?;
     let mut entries = pathops::parse(&before_raw);
-    pathops::reorder(&mut entries, from, to)
-        .map_err(|e| AppError::Usage(e.to_string()))?;
+    pathops::reorder(&mut entries, from, to).map_err(|e| AppError::Usage(e.to_string()))?;
     let after_raw = entries.join(";");
     if g.dry_run {
         print_changes(g.json, &pathops::parse(&before_raw), &entries);

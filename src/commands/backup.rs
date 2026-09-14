@@ -50,7 +50,11 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => std::path::Path::new("."),
     };
-    let tmp = dir.join(format!("{}.{}.tmp", name.to_string_lossy(), std::process::id()));
+    let tmp = dir.join(format!(
+        "{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
     let mut file = fs::File::create(&tmp)?;
     if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
         let _ = fs::remove_file(&tmp);
@@ -138,9 +142,8 @@ pub fn export(reg: &Registry, scopes: &[Scope], output: Option<&std::path::Path>
     match output {
         Some(path) => {
             check_output_path(path)?;
-            write_atomic(path, json.as_bytes()).map_err(|e| {
-                AppError::Other(format!("could not write {}: {e}", path.display()))
-            })?;
+            write_atomic(path, json.as_bytes())
+                .map_err(|e| AppError::Other(format!("could not write {}: {e}", path.display())))?;
         }
         None => println!("{json}"),
     }
@@ -353,8 +356,8 @@ fn import_plan_count(reg: &Registry, scopes: &[Scope], data: &ImportFile) -> Res
 pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Path) -> Result<u8> {
     let text = std::fs::read_to_string(file)
         .map_err(|e| AppError::Usage(format!("cannot read {}: {e}", file.display())))?;
-    let data: ImportFile =
-        serde_json::from_str(&text).map_err(|e| AppError::Usage(format!("invalid export JSON: {e}")))?;
+    let data: ImportFile = serde_json::from_str(&text)
+        .map_err(|e| AppError::Usage(format!("invalid export JSON: {e}")))?;
     data.check_origin()?;
 
     // Read-only plan first: it validates the whole file (value types included)
@@ -457,7 +460,9 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
                 if g.json {
                     item_docs.push(import_var_doc(&var.name, &before, &var.value));
                 } else if before == var.value {
-                    let old = current.map(|v| ty_name(&v.ty)).unwrap_or("(unset)".to_string());
+                    let old = current
+                        .map(|v| ty_name(&v.ty))
+                        .unwrap_or("(unset)".to_string());
                     println!("~ {} (type {old} -> {})", var.name, ty_name(&state.ty));
                 } else {
                     print_changes(
@@ -474,7 +479,11 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
         }
         applied += 1;
         // Delegation cannot happen for user scope, but propagate honestly.
-        let before_raw = state.current.as_ref().map(|v| v.raw.as_str()).unwrap_or_default();
+        let before_raw = state
+            .current
+            .as_ref()
+            .map(|v| v.raw.as_str())
+            .unwrap_or_default();
         let before = state.current.as_ref().map(|v| (v.raw.as_str(), &v.ty));
         let committed = commit(
             reg,
@@ -521,8 +530,7 @@ mod tests {
 
     #[test]
     fn export_refuses_non_windows_output_path() {
-        let err =
-            check_output_path(std::path::Path::new("/c/Users/User/backup.json")).unwrap_err();
+        let err = check_output_path(std::path::Path::new("/c/Users/User/backup.json")).unwrap_err();
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("non-Windows"));
         assert!(check_output_path(std::path::Path::new(r"C:\backup.json")).is_ok());

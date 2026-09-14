@@ -42,24 +42,24 @@ fn reserve_path_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn env_set(
-    reg: &Registry,
-    g: &Global,
-    scope: Scope,
-    name: &str,
-    value: &str,
-) -> Result<u8> {
+pub fn env_set(reg: &Registry, g: &Global, scope: Scope, name: &str, value: &str) -> Result<u8> {
     valid_var_name(name)?;
     reserve_path_name(name)?;
     let current = reg.read_var(scope, name)?;
     let before_raw = current.as_ref().map(|v| v.raw.as_str()).unwrap_or_default();
     // A dry run is a preview: report and exit 0 even when nothing would change.
     if g.dry_run {
-        print_changes(g.json, &entries_of(name, before_raw), &entries_of(name, value));
+        print_changes(
+            g.json,
+            &entries_of(name, before_raw),
+            &entries_of(name, value),
+        );
         return Ok(0);
     }
     if before_raw == value {
-        return Err(AppError::NoOp(format!("{name} is already set to that value")));
+        return Err(AppError::NoOp(format!(
+            "{name} is already set to that value"
+        )));
     }
     confirm(g, &format!("set {name}"))?;
     let ty = current
@@ -67,12 +67,27 @@ pub fn env_set(
         .map(|v| v.ty.clone())
         .unwrap_or_else(registry::default_var_type);
     let before = current.as_ref().map(|v| (v.raw.as_str(), &v.ty));
-    if commit(reg, g, scope, name, before, Some((value, &ty)), &format!("set {name}"))?
-        == Committed::Delegated
+    if commit(
+        reg,
+        g,
+        scope,
+        name,
+        before,
+        Some((value, &ty)),
+        &format!("set {name}"),
+    )? == Committed::Delegated
     {
         return Ok(0);
     }
-    report_mutation(g, scope, name, "set", before_raw, value, &format!("set: {name}"));
+    report_mutation(
+        g,
+        scope,
+        name,
+        "set",
+        before_raw,
+        value,
+        &format!("set: {name}"),
+    );
     Ok(0)
 }
 
@@ -94,6 +109,14 @@ pub fn env_delete(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Resul
     {
         return Ok(0);
     }
-    report_mutation(g, scope, name, "delete", &current.raw, "", &format!("deleted: {name}"));
+    report_mutation(
+        g,
+        scope,
+        name,
+        "delete",
+        &current.raw,
+        "",
+        &format!("deleted: {name}"),
+    );
     Ok(0)
 }

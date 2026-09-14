@@ -11,7 +11,7 @@
 
 use std::io;
 use winreg::enums::{KEY_READ, KEY_SET_VALUE, KEY_WRITE, REG_EXPAND_SZ, REG_SZ};
-use winreg::{RegKey, RegValue, HKLM, HKCU};
+use winreg::{HKCU, HKLM, RegKey, RegValue};
 
 pub use winreg::enums::RegType;
 

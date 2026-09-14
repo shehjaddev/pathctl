@@ -124,7 +124,11 @@ fn add_prepend_puts_entry_first() {
     let dir = setup("add_prepend");
     let a = r"C:\pathctl-p-a";
     let b = r"C:\pathctl-p-b";
-    pathctl("add_prepend", dir.path()).arg("add").arg(a).assert().success();
+    pathctl("add_prepend", dir.path())
+        .arg("add")
+        .arg(a)
+        .assert()
+        .success();
     pathctl("add_prepend", dir.path())
         .arg("add")
         .arg(b)
@@ -163,8 +167,16 @@ fn add_dedupe_noop_exits_4() {
 fn add_duplicate_without_dedupe_is_allowed() {
     let dir = setup("add_dup_allowed");
     let entry = r"C:\pathctl-dup";
-    pathctl("add_dup_allowed", dir.path()).arg("add").arg(entry).assert().success();
-    pathctl("add_dup_allowed", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("add_dup_allowed", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
+    pathctl("add_dup_allowed", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
     pathctl("add_dup_allowed", dir.path())
         .arg("check")
         .assert()
@@ -196,8 +208,16 @@ fn remove_by_path_and_by_index() {
     let dir = setup("remove");
     let a = r"C:\pathctl-rm-a";
     let b = r"C:\pathctl-rm-b";
-    pathctl("remove", dir.path()).arg("add").arg(a).assert().success();
-    pathctl("remove", dir.path()).arg("add").arg(b).assert().success();
+    pathctl("remove", dir.path())
+        .arg("add")
+        .arg(a)
+        .assert()
+        .success();
+    pathctl("remove", dir.path())
+        .arg("add")
+        .arg(b)
+        .assert()
+        .success();
     // by path
     pathctl("remove", dir.path())
         .arg("remove")
@@ -239,7 +259,11 @@ fn remove_numeric_dir_name_prefers_path_over_index() {
         .success();
     // A directory literally named `123` must be removable by path even
     // though it also parses as an index.
-    pathctl("remove_numeric", dir.path()).arg("add").arg("123").assert().success();
+    pathctl("remove_numeric", dir.path())
+        .arg("add")
+        .arg("123")
+        .assert()
+        .success();
     pathctl("remove_numeric", dir.path())
         .arg("remove")
         .arg("123")
@@ -258,8 +282,16 @@ fn remove_numeric_dir_name_prefers_path_over_index() {
 #[test]
 fn move_dry_run_reports_moved_entries() {
     let dir = setup("move_dry");
-    pathctl("move_dry", dir.path()).arg("add").arg("a").assert().success();
-    pathctl("move_dry", dir.path()).arg("add").arg("b").assert().success();
+    pathctl("move_dry", dir.path())
+        .arg("add")
+        .arg("a")
+        .assert()
+        .success();
+    pathctl("move_dry", dir.path())
+        .arg("add")
+        .arg("b")
+        .assert()
+        .success();
     pathctl("move_dry", dir.path())
         .arg("move")
         .arg("2")
@@ -274,7 +306,11 @@ fn move_dry_run_reports_moved_entries() {
 fn import_restores_path_registry_type() {
     let dir = setup("import_ty");
     let entry = r"C:\pathctl-ty";
-    pathctl("import_ty", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("import_ty", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
     let export_file = dir.path().join("ty.json");
     pathctl("import_ty", dir.path())
         .arg("export")
@@ -301,15 +337,28 @@ fn import_restores_path_registry_type() {
         .unwrap();
     let v2: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(v2["path"]["user"]["ty"].as_u64().unwrap(), new_ty);
-    assert!(v2["path"]["user"]["value"].as_str().unwrap().contains(entry));
+    assert!(
+        v2["path"]["user"]["value"]
+            .as_str()
+            .unwrap()
+            .contains(entry)
+    );
 }
 
 #[test]
 fn dedupe_keeps_first_and_second_run_noops() {
     let dir = setup("dedupe");
     let entry = r"C:\pathctl-dedupe";
-    pathctl("dedupe", dir.path()).arg("add").arg(entry).assert().success();
-    pathctl("dedupe", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("dedupe", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
+    pathctl("dedupe", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
     pathctl("dedupe", dir.path())
         .arg("dedupe")
         .assert()
@@ -329,8 +378,16 @@ fn move_reorders_entries() {
     let dir = setup("move");
     let a = r"C:\pathctl-mv-a";
     let b = r"C:\pathctl-mv-b";
-    pathctl("move", dir.path()).arg("add").arg(a).assert().success();
-    pathctl("move", dir.path()).arg("add").arg(b).assert().success();
+    pathctl("move", dir.path())
+        .arg("add")
+        .arg(a)
+        .assert()
+        .success();
+    pathctl("move", dir.path())
+        .arg("add")
+        .arg(b)
+        .assert()
+        .success();
     pathctl("move", dir.path())
         .arg("move")
         .arg("2")
@@ -360,8 +417,16 @@ fn prune_removes_missing_keeps_existing() {
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    pathctl("prune", dir.path()).arg("add").arg(missing).assert().success();
-    pathctl("prune", dir.path()).arg("add").arg(&existing).assert().success();
+    pathctl("prune", dir.path())
+        .arg("add")
+        .arg(missing)
+        .assert()
+        .success();
+    pathctl("prune", dir.path())
+        .arg("add")
+        .arg(&existing)
+        .assert()
+        .success();
     pathctl("prune", dir.path())
         .arg("prune")
         .assert()
@@ -382,7 +447,11 @@ fn prune_removes_missing_keeps_existing() {
 fn prune_dry_run_writes_nothing() {
     let dir = setup("prune_dry");
     let missing = r"C:\pathctl-prune-dry-missing";
-    pathctl("prune_dry", dir.path()).arg("add").arg(missing).assert().success();
+    pathctl("prune_dry", dir.path())
+        .arg("add")
+        .arg(missing)
+        .assert()
+        .success();
     pathctl("prune_dry", dir.path())
         .arg("prune")
         .arg("--dry-run")
@@ -453,7 +522,11 @@ fn prune_keeps_quoted_entries_for_existing_directories() {
 fn undo_restores_and_is_itself_undoable() {
     let dir = setup("undo");
     let entry = r"C:\pathctl-undo";
-    pathctl("undo", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("undo", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
     pathctl("undo", dir.path())
         .arg("undo")
         .assert()
@@ -480,8 +553,16 @@ fn undo_to_specific_snapshot() {
     let dir = setup("undo_to");
     let a = r"C:\pathctl-uto-a";
     let b = r"C:\pathctl-uto-b";
-    pathctl("undo_to", dir.path()).arg("add").arg(a).assert().success();
-    pathctl("undo_to", dir.path()).arg("add").arg(b).assert().success();
+    pathctl("undo_to", dir.path())
+        .arg("add")
+        .arg(a)
+        .assert()
+        .success();
+    pathctl("undo_to", dir.path())
+        .arg("add")
+        .arg(b)
+        .assert()
+        .success();
     // snapshot 1 = "" -> a ; snapshot 2 = "a" -> "a;b"
     pathctl("undo_to", dir.path())
         .arg("undo")
@@ -500,14 +581,21 @@ fn undo_to_specific_snapshot() {
 #[test]
 fn undo_with_nothing_exits_4() {
     let dir = setup("undo_empty");
-    pathctl("undo_empty", dir.path()).arg("undo").assert().code(4);
+    pathctl("undo_empty", dir.path())
+        .arg("undo")
+        .assert()
+        .code(4);
 }
 
 #[test]
 fn undo_kind_filter_selects_domain() {
     let dir = setup("undo_kind");
     let entry = r"C:\pathctl-uk";
-    pathctl("undo_kind", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("undo_kind", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
     pathctl("undo_kind", dir.path())
         .arg("env")
         .arg("set")
@@ -689,7 +777,11 @@ fn import_ignores_reserved_path_variable() {
 fn diff_tracks_external_drift_and_clears_after_undo() {
     let dir = setup("diff");
     let entry = r"C:\pathctl-diff";
-    pathctl("diff", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("diff", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
     // recorded state matches current -> clean
     pathctl("diff", dir.path()).arg("diff").assert().code(0);
     // simulate external drift by writing the test key behind the tool's back
@@ -948,7 +1040,11 @@ fn unknown_scope_is_rejected() {
 fn json_output_parses() {
     let dir = setup("json");
     let entry = r"C:\pathctl-json";
-    pathctl("json", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("json", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
     let out = pathctl("json", dir.path())
         .arg("list")
         .arg("--json")
@@ -1026,7 +1122,10 @@ fn internal_errors_do_not_use_the_findings_exit_code() {
 #[test]
 fn usage_error_exits_2() {
     let dir = setup("usage");
-    pathctl("usage", dir.path()).arg("bogus-command").assert().code(2);
+    pathctl("usage", dir.path())
+        .arg("bogus-command")
+        .assert()
+        .code(2);
 }
 
 #[test]
@@ -1057,7 +1156,11 @@ fn export_import_roundtrip() {
     let dir = setup("export");
     let name = "PATHCTL_EXPORT_VAR";
     let entry = r"C:\pathctl-export";
-    pathctl("export", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("export", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
     pathctl("export", dir.path())
         .arg("env")
         .arg("set")
@@ -1074,7 +1177,11 @@ fn export_import_roundtrip() {
         .success();
 
     // mutate state away
-    pathctl("export", dir.path()).arg("remove").arg(entry).assert().success();
+    pathctl("export", dir.path())
+        .arg("remove")
+        .arg(entry)
+        .assert()
+        .success();
     pathctl("export", dir.path())
         .arg("env")
         .arg("delete")
@@ -1140,7 +1247,11 @@ fn import_refuses_files_from_another_tool_or_newer_format() {
 fn export_excludes_path_from_variables() {
     let dir = setup("export_dedupe");
     let entry = r"C:\pathctl-ed";
-    pathctl("export_dedupe", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("export_dedupe", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
     pathctl("export_dedupe", dir.path())
         .arg("env")
         .arg("set")
@@ -1192,7 +1303,10 @@ fn export_to_a_file_is_atomic() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .filter(|n| n.ends_with(".tmp"))
         .collect();
-    assert!(leftovers.is_empty(), "export left temp files: {leftovers:?}");
+    assert!(
+        leftovers.is_empty(),
+        "export left temp files: {leftovers:?}"
+    );
 }
 
 #[test]
@@ -1293,8 +1407,14 @@ fn dry_run_exits_zero_even_when_nothing_would_change() {
         .arg("--dedupe")
         .assert()
         .code(4);
-    pathctl("dry_noop", dir.path()).arg("dedupe").assert().code(4);
-    pathctl("dry_noop", dir.path()).arg("prune").assert().code(4);
+    pathctl("dry_noop", dir.path())
+        .arg("dedupe")
+        .assert()
+        .code(4);
+    pathctl("dry_noop", dir.path())
+        .arg("prune")
+        .assert()
+        .code(4);
     pathctl("dry_noop", dir.path())
         .arg("move")
         .arg("1")
@@ -1453,7 +1573,10 @@ fn backup_scope_is_honoured() {
         .arg("--raw")
         .output()
         .unwrap();
-    assert!(!stdout(&out).contains("bscope-other"), "user PATH untouched");
+    assert!(
+        !stdout(&out).contains("bscope-other"),
+        "user PATH untouched"
+    );
 
     // An unknown scope is rejected here like everywhere else.
     pathctl("backup_scope", dir.path())
@@ -1480,7 +1603,11 @@ fn import_rejects_bad_json() {
 fn import_with_nothing_to_do_exits_4_without_prompting() {
     let dir = setup("import_noop");
     let entry = r"C:\pathctl-inoop";
-    pathctl("import_noop", dir.path()).arg("add").arg(entry).assert().success();
+    pathctl("import_noop", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
     let export_file = dir.path().join("noop.json");
     pathctl("import_noop", dir.path())
         .arg("export")

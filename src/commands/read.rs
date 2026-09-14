@@ -117,10 +117,7 @@ pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
         let dups = pathops::duplicates(&entries);
         for (i, entry) in entries.iter().enumerate() {
             if dups[i] {
-                findings.push(format!(
-                    "[{}] duplicate entry: {entry}",
-                    scope.label()
-                ));
+                findings.push(format!("[{}] duplicate entry: {entry}", scope.label()));
             }
             let analysis = analyze_entry(entry);
             if analysis.unresolvable {
@@ -130,10 +127,7 @@ pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
                 ));
             }
             if analysis.missing {
-                findings.push(format!(
-                    "[{}] missing directory: {entry}",
-                    scope.label()
-                ));
+                findings.push(format!("[{}] missing directory: {entry}", scope.label()));
             }
             if util::utf16_len(entry) > util::LONG_PATH_FLAG {
                 findings.push(format!(
@@ -175,9 +169,5 @@ pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
             println!("{f}");
         }
     }
-    if findings.is_empty() {
-        Ok(0)
-    } else {
-        Ok(1)
-    }
+    if findings.is_empty() { Ok(0) } else { Ok(1) }
 }
