@@ -48,7 +48,9 @@ for system-scope writes).
 
 `0` success · `1` `check`/`diff` found findings · `2` usage error ·
 `3` elevation required (system-scope write without admin) · `4` no-op
-(nothing changed) · `5` registry I/O error.
+(nothing changed, or nothing to act on) · `5` registry I/O error ·
+`6` other failure (snapshot store, file I/O, elevation launch, non-string
+registry value).
 
 ## How it stays safe
 

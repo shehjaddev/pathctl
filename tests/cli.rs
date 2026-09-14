@@ -961,6 +961,21 @@ fn json_output_parses() {
 }
 
 #[test]
+fn internal_errors_do_not_use_the_findings_exit_code() {
+    let dir = setup("exit6");
+    // A file where the output directory should be: writing cannot succeed, and
+    // exit 1 stays reserved for `check`/`diff` findings.
+    let blocked = dir.path().join("blocked");
+    std::fs::write(&blocked, "not a directory").unwrap();
+    pathctl("exit6", dir.path())
+        .arg("export")
+        .arg("--output")
+        .arg(blocked.join("backup.json"))
+        .assert()
+        .code(6);
+}
+
+#[test]
 fn usage_error_exits_2() {
     let dir = setup("usage");
     pathctl("usage", dir.path()).arg("bogus-command").assert().code(2);

@@ -122,7 +122,8 @@ pub fn diff(reg: &Registry, g: &Global, scopes: &[Scope], to: Option<usize>) -> 
     let mut docs: Vec<serde_json::Value> = Vec::new();
     // Read once: the journal does not change mid-diff, and this avoids
     // duplicate corrupt-snapshot warnings under `--scope all`.
-    let all = snapshot::list()?;
+    let all = snapshot::list()
+        .map_err(|e| AppError::Other(format!("could not read the snapshot journal: {e}")))?;
     for scope in scopes {
         let current_raw = reg.read_path(*scope)?.map(|v| v.raw).unwrap_or_default();
         let current = pathops::parse(&current_raw);

@@ -20,6 +20,10 @@ use crate::util;
 use serde::Serialize;
 
 use std::io;
+/// Command failures, each mapped to one documented exit code:
+/// 2 usage, 3 elevation required, 4 no-op, 5 registry I/O, 6 anything else.
+/// Exit 1 is reserved for `check`/`diff`, which report findings rather than
+/// failing, so scripts can tell "found something" from "broke".
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("{0}")]
@@ -41,7 +45,7 @@ impl AppError {
             AppError::NoOp(_) => 4,
             AppError::Registry(_) => 5,
             AppError::Usage(_) => 2,
-            AppError::Other(_) => 1,
+            AppError::Other(_) => 6,
         }
     }
 }
@@ -428,7 +432,9 @@ fn snapshots_filtered(
     scope_filter: Option<Scope>,
     kind: Option<SnapshotKind>,
 ) -> Result<Vec<Snapshot>> {
-    let snaps = snapshot::list()?;
+    // Not a registry failure: say so, or both the message and the exit code lie.
+    let snaps = snapshot::list()
+        .map_err(|e| AppError::Other(format!("could not read the snapshot journal: {e}")))?;
     Ok(snaps
         .into_iter()
         .filter(|s| scope_filter.is_none_or(|sc| s.scope == sc.label()))
