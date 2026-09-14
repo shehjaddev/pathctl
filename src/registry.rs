@@ -61,11 +61,12 @@ impl Registry {
     }
 
     /// Explicit test instance (unit tests; no env race). CLI tests instead
-    /// spawn the binary with `PATHCTL_TEST_REG`.
+    /// spawn the binary with `PATHCTL_TEST_REG`. `suffix` picks a scratch key
+    /// of its own, so tests running in parallel cannot see each other's data.
     #[cfg(test)]
-    pub fn test() -> Self {
+    pub fn test_named(suffix: &str) -> Self {
         Self {
-            test_suffix: Some(String::new()),
+            test_suffix: Some(format!("-{suffix}")),
         }
     }
 
@@ -203,6 +204,41 @@ fn test_suffix_from_env() -> Option<String> {
     })
 }
 
+/// Hands a unit test a scratch key of its own and removes it again when the
+/// test ends, panics included, so a failing run leaves no registry state
+/// behind and tests running in parallel never share a key.
+#[cfg(test)]
+pub struct TestKeyGuard {
+    suffix: String,
+}
+
+#[cfg(test)]
+impl TestKeyGuard {
+    pub fn new(suffix: &str) -> Self {
+        let guard = Self {
+            suffix: suffix.to_string(),
+        };
+        guard.remove();
+        guard
+    }
+
+    /// The registry handle for this test's key.
+    pub fn registry(&self) -> Registry {
+        Registry::test_named(&self.suffix)
+    }
+
+    fn remove(&self) {
+        let _ = winreg::HKCU.delete_subkey_all(format!("{TEST_KEY_PREFIX}-{}", self.suffix));
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestKeyGuard {
+    fn drop(&mut self) {
+        self.remove();
+    }
+}
+
 /// Default type for a *new* PATH value: expandable, like Windows ships it.
 pub fn default_path_type() -> RegType {
     REG_EXPAND_SZ
@@ -277,24 +313,19 @@ mod tests {
 
     #[test]
     fn type_preserving_roundtrip_on_test_key() {
-        let reg = Registry::test();
-        let before = reg.read_path(Scope::User).unwrap();
+        let key = TestKeyGuard::new("type-preserving");
+        let reg = key.registry();
         let value = r"%SystemRoot%\test;%ProgramFiles%\test";
         reg.write_path(Scope::User, value, REG_EXPAND_SZ).unwrap();
         let got = reg.read_path(Scope::User).unwrap().unwrap();
         assert_eq!(got.raw, value);
         assert_eq!(got.ty, REG_EXPAND_SZ, "type must be preserved");
-        match before {
-            Some(b) => reg.write_path(Scope::User, &b.raw, b.ty).unwrap(),
-            None => {
-                let _ = reg.delete_var(Scope::User, "Path");
-            }
-        }
     }
 
     #[test]
     fn literal_percent_entries_survive_roundtrip() {
-        let reg = Registry::test();
+        let key = TestKeyGuard::new("literal-percent");
+        let reg = key.registry();
         let name = "PATHCTL_TEST_VAR";
         reg.write_var(Scope::User, name, r"%SystemRoot%\x", REG_EXPAND_SZ)
             .unwrap();

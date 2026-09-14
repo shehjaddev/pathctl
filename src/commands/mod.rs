@@ -540,7 +540,8 @@ mod tests {
 
     #[test]
     fn delete_var_elev_wraps_registry_delete() {
-        let reg = Registry::test();
+        let key = registry::TestKeyGuard::new("delete-var-elev");
+        let reg = key.registry();
         reg.write_var(Scope::User, "PATHCTL_DEL_TEST", "x", registry::default_var_type())
             .unwrap();
         let g = Global::default();
