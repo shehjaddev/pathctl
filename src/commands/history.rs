@@ -72,7 +72,7 @@ pub fn undo(
         .ty
         .map(registry::reg_type_from_u32)
         .unwrap_or_else(|| {
-            if name == "Path" {
+            if name == registry::PATH_VALUE {
                 registry::default_path_type()
             } else {
                 registry::default_var_type()
@@ -93,12 +93,12 @@ pub fn undo(
     confirm(g, &format!("undo '{}' ({})", target.command, target.ts))?;
     guard_length(&name, &restore_raw)?;
 
-    let committed = if name == "Path" {
+    let committed = if name == registry::PATH_VALUE {
         if restore_raw.is_empty() {
             // The snapshot recorded that the value did not exist, so restore
             // absence rather than leaving an empty value behind (the variable
             // branch below does the same).
-            delete_var_elev(reg, g, scope, "Path")?
+            delete_var_elev(reg, g, scope, registry::PATH_VALUE)?
         } else {
             let committed = write_path_elev(reg, g, scope, &restore_raw, ty)?;
             if committed == Committed::Written {
@@ -156,7 +156,7 @@ pub fn diff(reg: &Registry, g: &Global, scopes: &[Scope], to: Option<usize>) -> 
         let current = pathops::parse(&current_raw);
         let snaps: Vec<&Snapshot> = all
             .iter()
-            .filter(|s| s.scope == scope.label() && s.name == "Path")
+            .filter(|s| s.scope == scope.label() && s.name == registry::PATH_VALUE)
             .collect();
         let base_raw = match to {
             // Mirror undo: `--to 0` and out-of-range ids are usage errors,

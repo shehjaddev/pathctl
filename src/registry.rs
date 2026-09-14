@@ -17,6 +17,8 @@ pub use winreg::enums::RegType;
 
 pub const USER_KEY_PATH: &str = "Environment";
 pub const SYSTEM_KEY_PATH: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
+/// The value name the PATH lives under, in both scopes.
+pub const PATH_VALUE: &str = "Path";
 const TEST_KEY_PREFIX: &str = r"Software\pathctl-test";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,11 +147,11 @@ impl Registry {
     }
 
     pub fn read_path(&self, scope: Scope) -> io::Result<Option<PathValue>> {
-        self.read_value(scope, "Path")
+        self.read_value(scope, PATH_VALUE)
     }
 
     pub fn write_path(&self, scope: Scope, value: &str, ty: RegType) -> io::Result<()> {
-        self.write_value(scope, "Path", value, ty)
+        self.write_value(scope, PATH_VALUE, value, ty)
     }
 
     pub fn read_var(&self, scope: Scope, name: &str) -> io::Result<Option<PathValue>> {

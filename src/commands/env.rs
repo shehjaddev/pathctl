@@ -33,7 +33,8 @@ pub(super) fn valid_var_name(name: &str) -> Result<()> {
 /// one opaque value (and `env delete Path` removes it), so send callers to the
 /// commands meant for it. Reading it is fine.
 fn reserve_path_name(name: &str) -> Result<()> {
-    if name.eq_ignore_ascii_case("Path") {
+    // The user may spell it any way; registry value names are case-insensitive.
+    if name.eq_ignore_ascii_case(registry::PATH_VALUE) {
         return Err(AppError::Usage(format!(
             "refusing to set or delete {name} as a variable: use `pathctl list`, `add`, \
              `remove`, `dedupe` or `prune`"

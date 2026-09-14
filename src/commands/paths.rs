@@ -39,7 +39,7 @@ pub fn add(
         reg,
         g,
         scope,
-        "Path",
+        registry::PATH_VALUE,
         Some((&before_raw, &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("add {entry}"),
@@ -50,7 +50,7 @@ pub fn add(
     report_mutation(
         g,
         scope,
-        "Path",
+        registry::PATH_VALUE,
         "add",
         &before_raw,
         &after_raw,
@@ -100,7 +100,7 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
         reg,
         g,
         scope,
-        "Path",
+        registry::PATH_VALUE,
         Some((&before_raw, &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("remove {removed}"),
@@ -111,7 +111,7 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
     report_mutation(
         g,
         scope,
-        "Path",
+        registry::PATH_VALUE,
         "remove",
         &before_raw,
         &after_raw,
@@ -142,7 +142,7 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         reg,
         g,
         scope,
-        "Path",
+        registry::PATH_VALUE,
         Some((&before_raw, &before_ty)),
         Some((&after_raw, &before_ty)),
         "dedupe",
@@ -153,7 +153,7 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
     report_mutation(
         g,
         scope,
-        "Path",
+        registry::PATH_VALUE,
         "dedupe",
         &before_raw,
         &after_raw,
@@ -194,7 +194,7 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         reg,
         g,
         scope,
-        "Path",
+        registry::PATH_VALUE,
         Some((&before_raw, &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("prune {}", removed.len()),
@@ -207,7 +207,15 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         let _ = writeln!(summary, "- {e}");
     }
     let _ = writeln!(summary, "pruned: {} missing entr{plural}", removed.len());
-    report_mutation(g, scope, "Path", "prune", &before_raw, &after_raw, &summary);
+    report_mutation(
+        g,
+        scope,
+        registry::PATH_VALUE,
+        "prune",
+        &before_raw,
+        &after_raw,
+        &summary,
+    );
     Ok(0)
 }
 
@@ -228,7 +236,7 @@ pub fn move_entry(reg: &Registry, g: &Global, scope: Scope, from: usize, to: usi
         reg,
         g,
         scope,
-        "Path",
+        registry::PATH_VALUE,
         Some((&before_raw, &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("move {from} {to}"),
@@ -239,7 +247,7 @@ pub fn move_entry(reg: &Registry, g: &Global, scope: Scope, from: usize, to: usi
     report_mutation(
         g,
         scope,
-        "Path",
+        registry::PATH_VALUE,
         "move",
         &before_raw,
         &after_raw,

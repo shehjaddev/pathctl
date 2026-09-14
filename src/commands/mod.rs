@@ -174,7 +174,7 @@ struct ChangesOut<'a> {
 /// The entry list a result reports: PATH entries, or the single value of a
 /// variable. Empty means "not set".
 fn entries_of(name: &str, value: &str) -> Vec<String> {
-    if name == "Path" {
+    if name == registry::PATH_VALUE {
         pathops::parse(value)
     } else if value.is_empty() {
         Vec::new()
@@ -390,7 +390,7 @@ fn commit(
     let before_ty = before.map(|(_, t)| t);
     let after_ty = after.map(|(_, t)| t);
     if before_raw == after_raw && before_ty == after_ty {
-        return Err(AppError::NoOp(if name == "Path" {
+        return Err(AppError::NoOp(if name == registry::PATH_VALUE {
             "PATH unchanged".into()
         } else {
             format!("{name} already in that state")
@@ -415,7 +415,9 @@ fn commit(
         before_ty.or(after_ty).cloned(),
     )?;
     let write = match after {
-        Some((value, ty)) if name == "Path" => write_path_elev(reg, g, scope, value, ty.clone()),
+        Some((value, ty)) if name == registry::PATH_VALUE => {
+            write_path_elev(reg, g, scope, value, ty.clone())
+        }
         Some((value, ty)) => write_var_elev(reg, g, scope, name, value, ty.clone()),
         None => delete_var_elev(reg, g, scope, name),
     };
@@ -425,7 +427,7 @@ fn commit(
             // Delegated to an elevated child: it journals itself, so drop our
             // premature snapshot rather than leave a phantom entry behind.
             let _ = std::fs::remove_file(&snap_path);
-            let verify = if name == "Path" {
+            let verify = if name == registry::PATH_VALUE {
                 "list/check"
             } else {
                 "env get"
@@ -441,7 +443,7 @@ fn commit(
             return Err(e);
         }
     }
-    if name == "Path" {
+    if name == registry::PATH_VALUE {
         warn_long_path(after_raw);
     }
     if !g.no_broadcast {
@@ -472,8 +474,8 @@ fn snapshots_filtered(
         .filter(|s| scope_filter.is_none_or(|sc| s.scope == sc.label()))
         .filter(|s| {
             kind.is_none_or(|k| match k {
-                SnapshotKind::Path => s.name == "Path",
-                SnapshotKind::Env => s.name != "Path",
+                SnapshotKind::Path => s.name == registry::PATH_VALUE,
+                SnapshotKind::Env => s.name != registry::PATH_VALUE,
             })
         })
         .collect())

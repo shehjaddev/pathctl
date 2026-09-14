@@ -91,7 +91,7 @@ pub fn export(reg: &Registry, scopes: &[Scope], output: Option<&std::path::Path>
         }
         match reg.read_path(scope)? {
             Some(v) => {
-                guard_text_type("Path", &v.ty)?;
+                guard_text_type(registry::PATH_VALUE, &v.ty)?;
                 Ok(Some(ExportValue {
                     value: v.raw,
                     ty: registry::reg_type_to_u32(v.ty),
@@ -106,7 +106,8 @@ pub fn export(reg: &Registry, scopes: &[Scope], output: Option<&std::path::Path>
         for (name, v) in reg.enum_all(Scope::User)? {
             // Path already lives in `path.*`; repeating it in `variables.user`
             // exported the same value twice.
-            if name.eq_ignore_ascii_case("Path") {
+            // Registry value names are case-insensitive, so compare that way.
+            if name.eq_ignore_ascii_case(registry::PATH_VALUE) {
                 continue;
             }
             // Only strings fit the format; say so rather than writing a value
@@ -221,7 +222,7 @@ fn path_import_state(
     value: &ImportValue,
 ) -> Result<(String, RegType, RegType)> {
     let (before_raw, before_ty) = current_path(reg, scope)?;
-    guard_text_type("Path", &before_ty)?;
+    guard_text_type(registry::PATH_VALUE, &before_ty)?;
     let write_ty = value
         .ty
         .map(registry::reg_type_from_u32)
@@ -247,7 +248,7 @@ fn import_path_doc(
 ) -> serde_json::Value {
     serde_json::json!({
         "scope": scope.label(),
-        "name": "Path",
+        "name": registry::PATH_VALUE,
         "before": pathops::parse(before),
         "after": pathops::parse(after),
         "ty_before": registry::reg_type_to_u32(ty_before.clone()),
@@ -299,7 +300,7 @@ struct ImportVarState {
 /// reserved `Path` name, invalid names) and refuses what the format cannot
 /// carry (non-string types), so the plan and the apply pass cannot disagree.
 fn var_import_state(reg: &Registry, var: &ImportVar) -> Result<Option<ImportVarState>> {
-    if var.name.eq_ignore_ascii_case("Path") || valid_var_name(&var.name).is_err() {
+    if var.name.eq_ignore_ascii_case(registry::PATH_VALUE) || valid_var_name(&var.name).is_err() {
         return Ok(None);
     }
     if let Some(t) = var.ty {
@@ -414,7 +415,7 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
             reg,
             g,
             scope,
-            "Path",
+            registry::PATH_VALUE,
             Some((&before_raw, &before_ty)),
             Some((&value.value, &write_ty)),
             "import",
