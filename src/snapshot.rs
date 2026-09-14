@@ -20,7 +20,7 @@ pub struct Snapshot {
     pub after: String,
     pub command: String,
     /// Unix nanos; the sort key and file name.
-    pub ts: u128,
+    pub ts: u64,
     /// Registry value type of `before`, when known, so undo of a delete can
     /// restore `REG_EXPAND_SZ` faithfully.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -43,10 +43,10 @@ impl Snapshot {
     ) -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         static LAST_TS: AtomicU64 = AtomicU64::new(0);
+        // Nanoseconds since 1970, saturating: a u64 holds them until 2554.
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos().min(u128::from(u64::MAX)) as u64)
-            .unwrap_or_default();
+            .map_or(0, |d| d.as_nanos().min(u128::from(u64::MAX)) as u64);
         // Monotonic in-process clock: two rapid saves must never share a
         // timestamp, otherwise the second file overwrites the first.
         let mut ts = now.max(LAST_TS.load(Ordering::Relaxed).saturating_add(1));
@@ -68,7 +68,7 @@ impl Snapshot {
             before: before.to_string(),
             after: after.to_string(),
             command: command.to_string(),
-            ts: u128::from(ts),
+            ts,
             ty,
         }
     }
@@ -96,11 +96,15 @@ fn save_at(dir: &Path, s: &Snapshot) -> io::Result<PathBuf> {
     fs::create_dir_all(dir)?;
     // Cross-process collision guard: if another process already claimed this
     // timestamp, bump forward until the filename is free (bounded retries).
+    // Best effort: the exists() check and the rename are separate steps, so the
+    // guard removes the practical risk (timestamps are nanoseconds) rather than
+    // the theoretical one. The temp name carries the process id, so two
+    // processes writing at once cannot clobber each other's temp file.
     let mut owned = s.clone();
     for _ in 0..1000 {
         let path = dir.join(format!("{}.json", owned.ts));
         if !path.exists() {
-            let tmp = dir.join(format!("{}.json.tmp", owned.ts));
+            let tmp = dir.join(format!("{}.{}.json.tmp", owned.ts, std::process::id()));
             let data = serde_json::to_vec_pretty(&owned).map_err(io::Error::other)?;
             fs::write(&tmp, &data)?;
             fs::OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
@@ -113,6 +117,27 @@ fn save_at(dir: &Path, s: &Snapshot) -> io::Result<PathBuf> {
         owned.ts = owned.ts.saturating_add(1);
     }
     Err(io::Error::other("snapshot timestamp collision: retries exhausted"))
+}
+
+/// A leftover temp file is only removed once it is older than this: a young one
+/// may belong to a save that is still in flight in another process. Temp files
+/// are named after their creation time, so this needs no filesystem metadata.
+const STALE_TMP_NANOS: u64 = 60 * 60 * 1_000_000_000;
+
+/// True for a temp file that no live save can own, given the current time.
+fn stale_tmp(name: &str, now_ns: u64) -> bool {
+    match name.split('.').next().and_then(|s| s.parse::<u64>().ok()) {
+        Some(stamp) => now_ns.saturating_sub(stamp) > STALE_TMP_NANOS,
+        // Not a name this module produces, so it cannot be our live write.
+        None => true,
+    }
+}
+
+/// Unix nanoseconds, saturating like `Snapshot::ts`.
+fn now_nanos() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos().min(u128::from(u64::MAX)) as u64)
 }
 
 pub fn list() -> io::Result<Vec<Snapshot>> {
@@ -161,11 +186,13 @@ pub fn prune() -> io::Result<usize> {
 }
 
 fn prune_at(dir: &Path) -> io::Result<usize> {
-    // Best-effort cleanup of stale crash leftovers.
+    // Best-effort cleanup of crash leftovers, leaving files a concurrent save
+    // may still be writing.
+    let now = now_nanos();
     if let Ok(rd) = fs::read_dir(dir) {
         for entry in rd.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".tmp") {
+            if name.ends_with(".tmp") && stale_tmp(&name, now) {
                 let _ = fs::remove_file(entry.path());
             }
         }
@@ -208,11 +235,34 @@ mod tests {
     }
 
     #[test]
+    fn prune_only_removes_stale_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = now_nanos();
+        // A temp file younger than the cutoff may belong to a live save.
+        assert!(!stale_tmp(&format!("{now}.1.json.tmp"), now));
+        assert!(stale_tmp(
+            &format!("{}.1.json.tmp", now - STALE_TMP_NANOS - 1),
+            now
+        ));
+        assert!(stale_tmp("not-a-timestamp.json.tmp", now));
+
+        let fresh = dir.path().join(format!("{now}.{}.json.tmp", std::process::id()));
+        let stale = dir
+            .path()
+            .join(format!("{}.1.json.tmp", now - STALE_TMP_NANOS - 1));
+        fs::write(&fresh, b"{}").unwrap();
+        fs::write(&stale, b"{}").unwrap();
+        prune_at(dir.path()).unwrap();
+        assert!(fresh.exists(), "a save in flight must survive prune");
+        assert!(!stale.exists(), "crash leftovers are cleaned up");
+    }
+
+    #[test]
     fn prune_keeps_newest_hundred() {
         let dir = tempfile::tempdir().unwrap();
         for i in 0..105u32 {
             let mut s = Snapshot::new("user", "Path", "", &format!("v{i}"), "add");
-            s.ts = i as u128 + 1_000_000; // strictly increasing, deterministic
+            s.ts = u64::from(i) + 1_000_000; // strictly increasing, deterministic
             save_at(dir.path(), &s).unwrap();
         }
         assert_eq!(prune_at(dir.path()).unwrap(), 5);
