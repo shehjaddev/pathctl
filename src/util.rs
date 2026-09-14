@@ -1,7 +1,7 @@
 //! Small Win32 helpers: variable expansion and length limits.
 
 /// Max size of a user-defined environment variable (Microsoft docs:
-/// GetEnvironmentVariable / CreateEnvironmentBlock limit — not a registry
+/// GetEnvironmentVariable / CreateEnvironmentBlock limit -- not a registry
 /// limit; the registry value-data limit is ~1 MB).
 pub const MAX_ENV_VALUE: usize = 32_767;
 

@@ -38,7 +38,7 @@ struct ExportVar {
 /// Refuse POSIX/MSYS-style output paths: on Windows a leading `/` means
 /// "root of the current drive", so `/c/Users/...` from git-bash either fails
 /// with a confusing error or writes somewhere unexpected. Failing loudly beats
-/// a backup command that silently wrote nothing (handoff #1).
+/// a backup command that silently wrote nothing.
 fn check_output_path(path: &std::path::Path) -> Result<()> {
     let s = path.as_os_str().to_string_lossy();
     if s.starts_with('/') {

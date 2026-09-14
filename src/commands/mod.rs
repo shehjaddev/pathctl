@@ -267,8 +267,8 @@ fn confirm(g: &Global, action: &str) -> Result<()> {
 /// Map a registry write error to the elevation contract: a system-scope
 /// `PermissionDenied` without `--elevate` is `ElevationRequired` (exit 3);
 /// with `--elevate` the process relaunches via UAC. Anything else is a plain
-/// registry error (exit 5). Extracted from the write helpers so the exit-3
-/// contract is unit-testable (handoff #4).
+/// registry error (exit 5). Kept separate from the write helpers so the
+/// exit-3 contract is unit-testable.
 ///
 /// Returns `Ok(true)` when the change was delegated to an elevated child
 /// (parent must not claim success); `Ok(false)` when written directly.
@@ -521,7 +521,7 @@ mod tests {
     #[test]
     fn user_scope_denied_is_registry_error_not_exit_3() {
         // Elevation never applies to user scope, even with --elevate (which
-        // would otherwise relaunch — this proves the branch is scope-gated).
+        // would otherwise relaunch -- this proves the branch is scope-gated).
         let g = Global { elevate: true, ..Global::default() };
         let e = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
         let err = write_error_to_app(&g, Scope::User, e, "elevate me").unwrap_err();

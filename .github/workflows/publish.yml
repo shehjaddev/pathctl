@@ -29,7 +29,7 @@ jobs:
           WINGET_PAT: ${{ secrets.WINGET_PAT }}
         run: |
           if (-not $env:WINGET_PAT) {
-            Write-Host "No WINGET_PAT secret — winget submission skipped."
+            Write-Host "No WINGET_PAT secret -- winget submission skipped."
             Write-Host "First submission is interactive and must be run once on a dev machine:"
             Write-Host "  wingetcreate new $env:INSTALLER_URL --token <WINGET_PAT>"
             Write-Host "Later versions publish automatically from this workflow:"
@@ -41,7 +41,7 @@ jobs:
           # submission is a one-time interactive `wingetcreate new` (above).
           wingetcreate update shehjaddev.pathctl --version $env:VERSION --urls $env:INSTALLER_URL --submit --token $env:WINGET_PAT
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "update failed — expected while the package is not yet in microsoft/winget-pkgs."
+            Write-Host "update failed -- expected while the package is not yet in microsoft/winget-pkgs."
             Write-Host "Run the first submission manually: wingetcreate new $env:INSTALLER_URL --token <WINGET_PAT>"
             exit 0
           }
@@ -71,14 +71,14 @@ jobs:
           GH_TOKEN: ${{ secrets.SCOOP_PAT }}
         run: |
           if (-not $env:SCOOP_PAT) {
-            Write-Host "No SCOOP_PAT secret — scoop submission skipped (manifest ready; open a PR to ScoopInstaller/Extras with packaging/pathctl.json)"
+            Write-Host "No SCOOP_PAT secret -- scoop submission skipped (manifest ready; open a PR to ScoopInstaller/Extras with packaging/pathctl.json)"
             exit 0
           }
           git config user.name "shehjaddev"
           git config user.email "95466889+shehjaddev@users.noreply.github.com"
           git checkout -b "scoop/pathctl-$env:VERSION"
           # ScoopInstaller/Extras keeps manifests at the bucket root, not in a
-          # subdirectory — copy the generated manifest there before committing.
+          # subdirectory -- copy the generated manifest there before committing.
           Copy-Item packaging/pathctl.json ./pathctl.json
           git add pathctl.json
           git commit -m "pathctl: add $env:VERSION"

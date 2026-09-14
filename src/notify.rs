@@ -1,5 +1,5 @@
 //! `WM_SETTINGCHANGE` broadcast so Explorer and new processes pick up
-//! registry environment changes immediately (spec §4).
+//! registry environment changes immediately.
 
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,

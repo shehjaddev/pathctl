@@ -159,7 +159,7 @@ pub fn diff(reg: &Registry, g: &Global, scopes: &[Scope], to: Option<usize>) -> 
                             "base": [],
                             "current": current,
                             "changes": [],
-                            "note": "no snapshots recorded yet — nothing to diff against",
+                            "note": "no snapshots recorded yet -- nothing to diff against",
                         }));
                     } else {
                         println!(

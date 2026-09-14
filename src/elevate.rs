@@ -1,4 +1,4 @@
-//! Relaunch self elevated (UAC) for system-scope writes (spec §4).
+//! Relaunch self elevated (UAC) for system-scope writes.
 
 use std::io;
 use std::os::windows::ffi::OsStrExt;

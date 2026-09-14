@@ -1,6 +1,6 @@
 //! Pure PATH string operations: parsing, normalization, dedupe, reorder, diff.
 //!
-//! No I/O here — every function is unit-testable without a registry.
+//! No I/O here -- every function is unit-testable without a registry.
 
 use serde::Serialize;
 use std::borrow::Cow;
@@ -72,10 +72,9 @@ pub fn duplicates(entries: &[String]) -> Vec<bool> {
     entries.iter().map(|e| !seen.insert(key(e))).collect()
 }
 
-/// Path equality per the spec's OrdinalIgnoreCase rule, with
-/// trailing-backslash equivalence. Windows path comparison is
-/// case-insensitive for the full Unicode alphabet, not just ASCII
-/// (e.g. non-Latin paths), so use Unicode-aware folding.
+/// Path equality: case-insensitive, with trailing-backslash, slash and quote
+/// equivalence. Windows compares paths case-insensitively for the full Unicode
+/// alphabet, not just ASCII, so use Unicode-aware folding.
 pub fn eq(a: &str, b: &str) -> bool {
     key(a) == key(b)
 }

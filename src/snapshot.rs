@@ -1,6 +1,6 @@
 //! Snapshot store: JSON before/after records that back `undo` and `diff`.
 //!
-//! Crash-safety (spec §4): a snapshot is written atomically (temp + fsync +
+//! Crash-safety: a snapshot is written atomically (temp + fsync +
 //! rename) *before* the registry write, so a crash mid-mutation always leaves
 //! an undoable record.
 
@@ -21,8 +21,8 @@ pub struct Snapshot {
     pub command: String,
     /// Unix nanos; the sort key and file name.
     pub ts: u128,
-    /// Registry value type of `before`, when known (lets undo of a delete
-    /// restore REG_EXPAND_SZ faithfully). Deviation from spec §4's JSON shape.
+    /// Registry value type of `before`, when known, so undo of a delete can
+    /// restore `REG_EXPAND_SZ` faithfully.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ty: Option<u32>,
 }
@@ -80,7 +80,7 @@ pub fn dir() -> PathBuf {
     if let Some(d) = std::env::var_os("PATHCTL_SNAPSHOT_DIR") {
         return PathBuf::from(d);
     }
-    // Never fall back to "." — that would pollute the caller's CWD with
+    // Never fall back to "." -- that would pollute the caller's CWD with
     // snapshots. Use the OS temp dir when LOCALAPPDATA is unavailable.
     match std::env::var_os("LOCALAPPDATA") {
         Some(base) => PathBuf::from(base).join("pathctl").join("snapshots"),

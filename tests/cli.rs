@@ -1,6 +1,6 @@
 //! CLI integration tests: exercise the real binary end to end against an
 //! isolated registry test key (`Software\pathctl-test-<name>`) and a temp
-//! snapshot dir. The real HKCU\Environment key is never touched (spec §8).
+//! snapshot dir. The real HKCU\Environment key is never touched.
 //! A real-path smoke test is gated behind PATHCTL_TEST_REAL=1 (see
 //! `real_path_gated`).
 
@@ -592,7 +592,7 @@ fn undo_to_zero_exits_2() {
 #[test]
 fn diff_without_baseline_reports_no_drift() {
     let dir = setup("diff_nobase");
-    // No mutations → no snapshots. Must not flag the whole PATH as drift.
+    // No mutations -> no snapshots. Must not flag the whole PATH as drift.
     pathctl("diff_nobase", dir.path())
         .arg("diff")
         .assert()
@@ -690,7 +690,7 @@ fn diff_tracks_external_drift_and_clears_after_undo() {
     let dir = setup("diff");
     let entry = r"C:\pathctl-diff";
     pathctl("diff", dir.path()).arg("add").arg(entry).assert().success();
-    // recorded state matches current → clean
+    // recorded state matches current -> clean
     pathctl("diff", dir.path()).arg("diff").assert().code(0);
     // simulate external drift by writing the test key behind the tool's back
     let drift = r"C:\pathctl-external-drift";
@@ -838,7 +838,7 @@ fn env_set_get_delete_roundtrip() {
         .assert()
         .success()
         .stdout("hello world\n");
-    // idempotent set → no-op
+    // idempotent set -> no-op
     pathctl("env", dir.path())
         .arg("env")
         .arg("set")
@@ -1123,7 +1123,7 @@ fn export_excludes_path_from_variables() {
         .stdout
         .clone();
     let v: serde_json::Value = serde_json::from_slice(&out).expect("valid export JSON");
-    // Path is represented exactly once, in path.user — not repeated in variables.user.
+    // Path is represented exactly once, in path.user -- not repeated in variables.user.
     assert!(v["path"]["user"]["value"].as_str().unwrap().contains(entry));
     let vars = v["variables"]["user"].as_array().unwrap();
     assert!(

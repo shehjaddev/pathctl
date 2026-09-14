@@ -1,4 +1,4 @@
-//! pathctl — safe PATH & environment-variable manager for Windows.
+//! pathctl -- safe PATH & environment-variable manager for Windows.
 
 mod commands;
 mod elevate;

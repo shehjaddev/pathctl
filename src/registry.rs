@@ -5,7 +5,7 @@
 //! - system PATH: `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment\Path`
 //!
 //! Every write preserves the existing registry value type (`REG_EXPAND_SZ`
-//! stays `REG_EXPAND_SZ`) — the core differentiator from .NET tooling, which
+//! stays `REG_EXPAND_SZ`) -- the core differentiator from .NET tooling, which
 //! flattens expandable values to `REG_SZ` (dotnet/runtime#89695, unfixed by
 //! design). Never goes through `setx` (1024-char crop, documented data loss).
 
@@ -53,7 +53,7 @@ pub struct Registry {
 
 impl Registry {
     /// Prod instance. `PATHCTL_TEST_REG` redirects writes to a scratch key
-    /// under `HKCU\Software\pathctl-test…` (CLI tests).
+    /// under `HKCU\Software\pathctl-test...` (CLI tests).
     pub fn new() -> Self {
         Self {
             test_suffix: test_suffix_from_env(),
@@ -104,7 +104,7 @@ impl Registry {
         let hive = self.hive(scope);
         match hive.open_subkey_with_flags(self.key_path(scope), access) {
             Ok(k) => Ok(k),
-            // Missing key on a fresh profile: create it — but only when the
+            // Missing key on a fresh profile: create it -- but only when the
             // caller asked for write access. Read commands must not mutate
             // the registry; they treat a missing key as empty instead.
             // (KEY_READ and KEY_WRITE share STANDARD_RIGHTS bits, so test the
@@ -119,7 +119,7 @@ impl Registry {
     fn read_value(&self, scope: Scope, name: &str) -> io::Result<Option<PathValue>> {
         let key = match self.open_read(scope) {
             Ok(k) => k,
-            // Key absent → no values, not an error, and nothing created.
+            // Key absent -> no values, not an error, and nothing created.
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),
         };
