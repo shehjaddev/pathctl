@@ -3,6 +3,8 @@
 //! No I/O here — every function is unit-testable without a registry.
 
 use serde::Serialize;
+use std::borrow::Cow;
+use std::collections::HashSet;
 
 /// Split a PATH value into entries.
 ///
@@ -36,8 +38,13 @@ pub fn trim_quotes(s: &str) -> &str {
 /// trailing backslashes stripped, except at drive roots where the root
 /// backslash is mandatory (`C:\`).
 pub fn canon(s: &str) -> String {
-    let normalized = trim_quotes(s).replace('/', "\\");
-    let t = normalized.trim_end_matches('\\');
+    let t = trim_quotes(s);
+    let t = if t.contains('/') {
+        Cow::Owned(t.replace('/', "\\"))
+    } else {
+        Cow::Borrowed(t)
+    };
+    let t = t.trim_end_matches('\\');
     if is_drive_root(t) {
         format!("{t}\\")
     } else {
@@ -51,28 +58,43 @@ fn is_drive_root(s: &str) -> bool {
     b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
 }
 
-/// Case-insensitive equality per the spec's OrdinalIgnoreCase rule,
-/// with trailing-backslash equivalence. Windows path comparison is
+/// Comparison key: the canonical form, case-folded. Comparing precomputed keys
+/// instead of canonicalizing both sides on every comparison is what keeps the
+/// duplicate scans linear rather than quadratic.
+fn key(s: &str) -> String {
+    canon(s).to_lowercase()
+}
+
+/// One `true` per entry that repeats an earlier entry (case-, separator- and
+/// quote-insensitive); the first occurrence of each value is `false`.
+pub fn duplicates(entries: &[String]) -> Vec<bool> {
+    let mut seen: HashSet<String> = HashSet::with_capacity(entries.len());
+    entries.iter().map(|e| !seen.insert(key(e))).collect()
+}
+
+/// Path equality per the spec's OrdinalIgnoreCase rule, with
+/// trailing-backslash equivalence. Windows path comparison is
 /// case-insensitive for the full Unicode alphabet, not just ASCII
-/// (e.g. Cyrillic paths), so use Unicode-aware folding.
+/// (e.g. non-Latin paths), so use Unicode-aware folding.
 pub fn eq(a: &str, b: &str) -> bool {
-    canon(a).to_lowercase() == canon(b).to_lowercase()
+    key(a) == key(b)
 }
 
 /// Case-insensitive membership test.
 pub fn contains(entries: &[String], entry: &str) -> bool {
-    entries.iter().any(|e| eq(e, entry))
+    let needle = key(entry);
+    entries.iter().any(|e| key(e) == needle)
 }
 
 /// Remove duplicates keeping the first occurrence (case-insensitive).
-pub fn dedupe(entries: Vec<String>) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for e in entries {
-        if !contains(&out, &e) {
-            out.push(e);
-        }
-    }
-    out
+pub fn dedupe(entries: &[String]) -> Vec<String> {
+    let dups = duplicates(entries);
+    entries
+        .iter()
+        .zip(dups)
+        .filter(|(_, dup)| !*dup)
+        .map(|(e, _)| e.clone())
+        .collect()
 }
 
 /// Remove the entry at 1-based `index`. Returns the removed entry.
@@ -198,13 +220,24 @@ mod tests {
 
     #[test]
     fn dedupe_keeps_first() {
-        let v = dedupe(vec![
+        let v = dedupe(&[
             "C:\\a".into(),
             "c:\\A\\".into(),
             "C:\\b".into(),
             "C:\\a".into(),
         ]);
         assert_eq!(v, vec!["C:\\a", "C:\\b"]);
+    }
+
+    #[test]
+    fn duplicates_flags_only_repeats() {
+        let v: Vec<String> = vec![
+            r"C:\a".into(),
+            "c:/A/".into(),
+            r"C:\b".into(),
+            r"C:\a".into(),
+        ];
+        assert_eq!(duplicates(&v), vec![false, true, false, true]);
     }
 
     #[test]

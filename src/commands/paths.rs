@@ -79,7 +79,7 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
 pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
     let (before_raw, before_ty) = current_path(reg, scope)?;
     let before = pathops::parse(&before_raw);
-    let after = pathops::dedupe(before.clone());
+    let after = pathops::dedupe(&before);
     let after_raw = after.join(";");
     if after_raw == before_raw {
         return Err(AppError::NoOp("PATH already has no duplicates".into()));

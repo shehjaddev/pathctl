@@ -23,6 +23,7 @@ pub fn list(reg: &Registry, g: &Global, scopes: &[Scope], raw: bool) -> Result<u
             None => Vec::new(),
         };
         let mut rows = Vec::new();
+        let dups = pathops::duplicates(&entries);
         for (i, entry) in entries.iter().enumerate() {
             // Analysis always runs on the expanded form: in `--raw` mode only
             // the `expanded` flag is suppressed, so a resolvable `%VAR%` entry
@@ -38,7 +39,7 @@ pub fn list(reg: &Registry, g: &Global, scopes: &[Scope], raw: bool) -> Result<u
             if analysis.missing {
                 flags.push("missing");
             }
-            if entries[..i].iter().any(|e| pathops::eq(e, entry)) {
+            if dups[i] {
                 flags.push("dup");
             }
             rows.push(EntryOut {
@@ -96,15 +97,13 @@ pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
             Some(v) => pathops::parse(&v.raw),
             None => Vec::new(),
         };
-        let mut seen: Vec<String> = Vec::new();
-        for entry in &entries {
-            if seen.iter().any(|e| pathops::eq(e, entry)) {
+        let dups = pathops::duplicates(&entries);
+        for (i, entry) in entries.iter().enumerate() {
+            if dups[i] {
                 findings.push(format!(
                     "[{}] duplicate entry: {entry}",
                     scope.label()
                 ));
-            } else {
-                seen.push(entry.clone());
             }
             let analysis = analyze_entry(entry);
             if analysis.unresolvable {
