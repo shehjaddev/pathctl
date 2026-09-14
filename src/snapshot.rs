@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const MAX_SNAPSHOTS: usize = 100;
@@ -41,34 +42,13 @@ impl Snapshot {
         command: &str,
         ty: Option<u32>,
     ) -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static LAST_TS: AtomicU64 = AtomicU64::new(0);
-        // Nanoseconds since 1970, saturating: a u64 holds them until 2554.
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos().min(u128::from(u64::MAX)) as u64);
-        // Monotonic in-process clock: two rapid saves must never share a
-        // timestamp, otherwise the second file overwrites the first.
-        let mut ts = now.max(LAST_TS.load(Ordering::Relaxed).saturating_add(1));
-        loop {
-            let last = LAST_TS.load(Ordering::Relaxed);
-            if ts <= last {
-                ts = last.saturating_add(1);
-            }
-            if LAST_TS
-                .compare_exchange_weak(last, ts, Ordering::Relaxed, Ordering::Relaxed)
-                .is_ok()
-            {
-                break;
-            }
-        }
         Self {
             scope: scope.to_string(),
             name: name.to_string(),
             before: before.to_string(),
             after: after.to_string(),
             command: command.to_string(),
-            ts,
+            ts: next_timestamp(),
             ty,
         }
     }
@@ -140,6 +120,17 @@ fn now_nanos() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos().min(u128::from(u64::MAX)) as u64)
+}
+
+/// A timestamp for a new snapshot, unique within this process. Two saves in the
+/// same instant must not share one: `list` orders by it and `undo --to` picks a
+/// snapshot by it, so a repeat would be ambiguous. A counter under a mutex is
+/// enough -- saving is not a hot path, and it needs no ordering reasoning.
+fn next_timestamp() -> u64 {
+    static LAST: Mutex<u64> = Mutex::new(0);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    *last = now_nanos().max(last.saturating_add(1));
+    *last
 }
 
 pub fn list() -> io::Result<Vec<Snapshot>> {
