@@ -28,6 +28,20 @@ pub(super) fn valid_var_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// `Path` belongs to the path commands, which split entries, check existence
+/// and guard length. Writing it as a plain variable replaces the whole PATH in
+/// one opaque value (and `env delete Path` removes it), so send callers to the
+/// commands meant for it. Reading it is fine.
+fn reserve_path_name(name: &str) -> Result<()> {
+    if name.eq_ignore_ascii_case("Path") {
+        return Err(AppError::Usage(format!(
+            "refusing to set or delete {name} as a variable: use `pathctl list`, `add`, \
+             `remove`, `dedupe` or `prune`"
+        )));
+    }
+    Ok(())
+}
+
 pub fn env_set(
     reg: &Registry,
     g: &Global,
@@ -36,6 +50,7 @@ pub fn env_set(
     value: &str,
 ) -> Result<u8> {
     valid_var_name(name)?;
+    reserve_path_name(name)?;
     let current = reg.read_var(scope, name)?;
     let before_raw = current.as_ref().map(|v| v.raw.as_str()).unwrap_or_default();
     // A dry run is a preview: report and exit 0 even when nothing would change.
@@ -63,6 +78,7 @@ pub fn env_set(
 
 pub fn env_delete(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Result<u8> {
     valid_var_name(name)?;
+    reserve_path_name(name)?;
     let current = reg.read_var(scope, name)?;
     let before_raw = current.as_ref().map(|v| v.raw.as_str()).unwrap_or_default();
     if g.dry_run {

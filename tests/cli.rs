@@ -961,6 +961,54 @@ fn json_output_parses() {
 }
 
 #[test]
+fn env_refuses_to_set_or_delete_the_path_variable() {
+    let dir = setup("env_path");
+    let entry = r"C:\pathctl-envpath";
+    pathctl("env_path", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
+    // PATH is a path-command concern: writing it as an opaque variable would
+    // replace the whole value (and delete would remove it outright).
+    pathctl("env_path", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg("Path")
+        .arg(r"C:\only")
+        .assert()
+        .code(2);
+    pathctl("env_path", dir.path())
+        .arg("env")
+        .arg("delete")
+        .arg("path")
+        .assert()
+        .code(2);
+    pathctl("env_path", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg("Path")
+        .arg(r"C:\only")
+        .arg("--dry-run")
+        .assert()
+        .code(2);
+    // PATH is untouched, and reading it as a variable still works.
+    pathctl("env_path", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(entry));
+    pathctl("env_path", dir.path())
+        .arg("env")
+        .arg("get")
+        .arg("Path")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(entry));
+}
+
+#[test]
 fn internal_errors_do_not_use_the_findings_exit_code() {
     let dir = setup("exit6");
     // A file where the output directory should be: writing cannot succeed, and
