@@ -5,6 +5,7 @@ use super::*;
 
 use std::fs;
 use std::io::Write;
+use std::path::Component;
 
 #[derive(Serialize)]
 struct ExportFile {
@@ -62,10 +63,16 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
 /// Refuse POSIX/MSYS-style output paths: on Windows a leading `/` means
 /// "root of the current drive", so `/c/Users/...` from git-bash either fails
 /// with a confusing error or writes somewhere unexpected. Failing loudly beats
-/// a backup command that silently wrote nothing.
+/// a backup command that silently wrote nothing. `C:backup.json` is refused
+/// for the same reason: drive-relative is not the file the user named.
 fn check_output_path(path: &std::path::Path) -> Result<()> {
     let s = path.as_os_str().to_string_lossy();
-    if s.starts_with('/') {
+    let drive_relative = path
+        .components()
+        .next()
+        .is_some_and(|c| matches!(c, Component::Prefix(_)))
+        && !path.has_root();
+    if s.starts_with('/') || drive_relative {
         return Err(AppError::Usage(format!(
             "refusing non-Windows output path '{s}': use a Windows path such as C:\\backup.json"
         )));
@@ -520,5 +527,9 @@ mod tests {
         assert!(err.to_string().contains("non-Windows"));
         assert!(check_output_path(std::path::Path::new(r"C:\backup.json")).is_ok());
         assert!(check_output_path(std::path::Path::new(r"\\server\share\backup.json")).is_ok());
+        // Drive-relative paths are not what the user named; plain relative
+        // paths are still fine.
+        assert!(check_output_path(std::path::Path::new(r"C:backup.json")).is_err());
+        assert!(check_output_path(std::path::Path::new(r"backup.json")).is_ok());
     }
 }
