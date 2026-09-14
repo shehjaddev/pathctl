@@ -58,26 +58,22 @@ pub fn expand(s: &str) -> String {
 }
 
 /// True if `p` contains a `%VAR%`-style reference (`%NAME%` with a
-/// non-empty name). A lone `%` (e.g. `C:\100%_coverage`) is not a reference.
+/// non-empty name). A lone `%` (e.g. `C:\100%_coverage`) is not a reference,
+/// and neither is `%A\B%`: variable names never contain path separators or `;`.
 pub fn has_var_ref(p: &str) -> bool {
-    let bytes = p.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            let mut j = i + 1;
-            while j < bytes.len() && bytes[j] != b'%' {
-                // Variable names never contain path separators or `;`;
-                // bail early so `C:\a%b\c` is not treated as a reference.
-                if bytes[j] == b'\\' || bytes[j] == b'/' || bytes[j] == b';' {
-                    break;
-                }
-                j += 1;
-            }
-            if j < bytes.len() && bytes[j] == b'%' && j > i + 1 {
-                return true;
-            }
+    let mut rest = p;
+    while let Some(open) = rest.find('%') {
+        // Resume one character past this `%`, so a failed pair can still open
+        // one (as in `%%A%`).
+        rest = &rest[open + 1..];
+        let Some(close) = rest.find('%') else {
+            // No `%` left to close anything.
+            return false;
+        };
+        let name = &rest[..close];
+        if !name.is_empty() && !name.contains(['\\', '/', ';']) {
+            return true;
         }
-        i += 1;
     }
     false
 }
@@ -115,5 +111,9 @@ mod tests {
         assert!(!has_var_ref(r"C:\tools"));
         assert!(!has_var_ref(r"C:\a%b\c"));
         assert!(!has_var_ref("%%"));
+        // A separator inside the name means it is not a variable reference,
+        // and a failed pair can still open one.
+        assert!(!has_var_ref(r"%A\B%"));
+        assert!(has_var_ref("%%A%"));
     }
 }
