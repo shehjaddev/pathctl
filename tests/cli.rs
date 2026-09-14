@@ -1137,6 +1137,54 @@ fn env_refuses_to_set_or_delete_the_path_variable() {
 }
 
 #[test]
+fn check_json_reports_structured_findings() {
+    let dir = setup("check_json");
+    let missing = r"C:\pathctl-check-json-missing";
+    // One entry twice: reported as a duplicate and as a missing directory.
+    pathctl("check_json", dir.path())
+        .arg("add")
+        .arg(missing)
+        .assert()
+        .success();
+    pathctl("check_json", dir.path())
+        .arg("add")
+        .arg(missing)
+        .assert()
+        .success();
+    let out = pathctl("check_json", dir.path())
+        .arg("check")
+        .arg("--json")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("check --json document");
+    assert_eq!(v["ok"], false);
+    let findings = v["findings"].as_array().expect("findings array");
+    // Findings are tagged data, not formatted sentences.
+    assert!(
+        findings.iter().any(|f| {
+            f["kind"] == "duplicate" && f["scope"] == "user" && f["entry"] == missing
+        }),
+        "expected a duplicate finding, got {findings:?}"
+    );
+    assert!(
+        findings.iter().any(|f| {
+            f["kind"] == "missing" && f["scope"] == "user" && f["entry"] == missing
+        }),
+        "expected a missing finding, got {findings:?}"
+    );
+    // A clean PATH reports ok with no findings at all.
+    let dir = setup("check_json_clean");
+    let out = pathctl("check_json_clean", dir.path())
+        .arg("check")
+        .arg("--json")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("check --json document");
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["findings"].as_array().unwrap().len(), 0);
+}
+
+#[test]
 fn internal_errors_do_not_use_the_findings_exit_code() {
     let dir = setup("exit6");
     // A file where the output directory should be: writing cannot succeed, and
