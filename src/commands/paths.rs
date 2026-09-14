@@ -1,6 +1,7 @@
 //! PATH mutations: add, remove, dedupe, prune and move.
 
 use super::*;
+use std::fmt::Write as _;
 
 pub fn add(
     reg: &Registry,
@@ -190,9 +191,9 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
     }
     let mut summary = String::new();
     for e in &removed {
-        summary.push_str(&format!("- {e}\n"));
+        let _ = writeln!(summary, "- {e}");
     }
-    summary.push_str(&format!("pruned: {} missing entr{plural}", removed.len()));
+    let _ = writeln!(summary, "pruned: {} missing entr{plural}", removed.len());
     report_mutation(g, scope, "Path", "prune", &before_raw, &after_raw, &summary);
     Ok(0)
 }
