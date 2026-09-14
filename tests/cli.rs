@@ -1166,6 +1166,128 @@ fn mutations_report_json() {
 }
 
 #[test]
+fn dry_run_exits_zero_even_when_nothing_would_change() {
+    let dir = setup("dry_noop");
+    let existing = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    pathctl("dry_noop", dir.path())
+        .arg("add")
+        .arg(&existing)
+        .assert()
+        .success();
+    // The real runs report these as no-ops ...
+    pathctl("dry_noop", dir.path())
+        .arg("add")
+        .arg(&existing)
+        .arg("--dedupe")
+        .assert()
+        .code(4);
+    pathctl("dry_noop", dir.path()).arg("dedupe").assert().code(4);
+    pathctl("dry_noop", dir.path()).arg("prune").assert().code(4);
+    pathctl("dry_noop", dir.path())
+        .arg("move")
+        .arg("1")
+        .arg("1")
+        .assert()
+        .code(4);
+    // ... but a dry run is a preview and always exits 0.
+    pathctl("dry_noop", dir.path())
+        .arg("add")
+        .arg(&existing)
+        .arg("--dedupe")
+        .arg("--dry-run")
+        .assert()
+        .code(0);
+    pathctl("dry_noop", dir.path())
+        .arg("dedupe")
+        .arg("--dry-run")
+        .assert()
+        .code(0);
+    pathctl("dry_noop", dir.path())
+        .arg("prune")
+        .arg("--dry-run")
+        .assert()
+        .code(0);
+    pathctl("dry_noop", dir.path())
+        .arg("move")
+        .arg("1")
+        .arg("1")
+        .arg("--dry-run")
+        .assert()
+        .code(0);
+    pathctl("dry_noop", dir.path())
+        .arg("remove")
+        .arg(r"C:\pathctl-not-in-path")
+        .arg("--dry-run")
+        .assert()
+        .code(0);
+}
+
+#[test]
+fn dry_run_exits_zero_for_env_history_and_import() {
+    let dir = setup("dry_noop2");
+    // Undo with nothing recorded, and env work with nothing to do.
+    pathctl("dry_noop2", dir.path())
+        .arg("undo")
+        .assert()
+        .code(4);
+    pathctl("dry_noop2", dir.path())
+        .arg("undo")
+        .arg("--dry-run")
+        .assert()
+        .code(0);
+    pathctl("dry_noop2", dir.path())
+        .arg("env")
+        .arg("delete")
+        .arg("PATHCTL_NOT_SET")
+        .arg("--dry-run")
+        .assert()
+        .code(0);
+    pathctl("dry_noop2", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg("PATHCTL_DRY")
+        .arg("v")
+        .assert()
+        .success();
+    pathctl("dry_noop2", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg("PATHCTL_DRY")
+        .arg("v")
+        .assert()
+        .code(4);
+    pathctl("dry_noop2", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg("PATHCTL_DRY")
+        .arg("v")
+        .arg("--dry-run")
+        .assert()
+        .code(0);
+    // An import with nothing to change.
+    let f = dir.path().join("empty.json");
+    std::fs::write(
+        &f,
+        r#"{"tool":"pathctl","version":1,"path":{},"variables":{"user":[]}}"#,
+    )
+    .unwrap();
+    pathctl("dry_noop2", dir.path())
+        .arg("import")
+        .arg(&f)
+        .assert()
+        .code(4);
+    pathctl("dry_noop2", dir.path())
+        .arg("import")
+        .arg(&f)
+        .arg("--dry-run")
+        .assert()
+        .code(0);
+}
+
+#[test]
 fn backup_scope_is_honoured() {
     let dir = setup("backup_scope");
     let entry = r"C:\pathctl-bscope";

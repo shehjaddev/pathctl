@@ -16,9 +16,7 @@ pub fn add(
     }
     let (before_raw, before_ty) = current_path(reg, scope)?;
     let mut entries = pathops::parse(&before_raw);
-    if dedupe && pathops::contains(&entries, &entry) {
-        return Err(AppError::NoOp(format!("{entry} is already in PATH")));
-    }
+    let already_present = dedupe && pathops::contains(&entries, &entry);
     if prepend {
         entries.insert(0, entry.clone());
     } else {
@@ -26,9 +24,14 @@ pub fn add(
     }
     let after_raw = entries.join(";");
 
+    // A dry run is a preview: it reports and exits 0 even when the real run
+    // would be a no-op.
     if g.dry_run {
         print_changes(g.json, &pathops::parse(&before_raw), &entries);
         return Ok(0);
+    }
+    if already_present {
+        return Err(AppError::NoOp(format!("{entry} is already in PATH")));
     }
     confirm(g, &format!("add '{entry}' to PATH"))?;
     if commit(
@@ -57,15 +60,19 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
         .strip_prefix('#')
         .and_then(|s| s.parse::<usize>().ok())
     {
-        pathops::remove_index(&mut entries, hash_idx)
-            .map_err(|e| AppError::Usage(e.to_string()))?
+        Some(
+            pathops::remove_index(&mut entries, hash_idx)
+                .map_err(|e| AppError::Usage(e.to_string()))?,
+        )
     } else if let Some(pos) = entries.iter().position(|e| pathops::eq(e, target)) {
-        entries.remove(pos)
+        Some(entries.remove(pos))
     } else if let Some(idx) = parse_index(target) {
-        pathops::remove_index(&mut entries, idx)
-            .map_err(|e| AppError::Usage(e.to_string()))?
+        Some(
+            pathops::remove_index(&mut entries, idx)
+                .map_err(|e| AppError::Usage(e.to_string()))?,
+        )
     } else {
-        return Err(AppError::NoOp(format!("{target} is not in PATH")));
+        None
     };
     let after_raw = entries.join(";");
 
@@ -73,6 +80,7 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
         print_changes(g.json, &pathops::parse(&before_raw), &entries);
         return Ok(0);
     }
+    let removed = removed.ok_or_else(|| AppError::NoOp(format!("{target} is not in PATH")))?;
     confirm(g, &format!("remove '{removed}' from PATH"))?;
     if commit(
         reg,
@@ -103,12 +111,12 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
     let before = pathops::parse(&before_raw);
     let after = pathops::dedupe(&before);
     let after_raw = after.join(";");
-    if after_raw == before_raw {
-        return Err(AppError::NoOp("PATH already has no duplicates".into()));
-    }
     if g.dry_run {
         print_changes(g.json, &before, &after);
         return Ok(0);
+    }
+    if after_raw == before_raw {
+        return Err(AppError::NoOp("PATH already has no duplicates".into()));
     }
     confirm(g, "dedupe PATH")?;
     if commit(
@@ -150,14 +158,13 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
             kept.push(e.clone());
         }
     }
-    if removed.is_empty() {
-        return Err(AppError::NoOp("PATH has no missing entries".into()));
-    }
     let after_raw = kept.join(";");
-
     if g.dry_run {
         print_changes(g.json, &before, &kept);
         return Ok(0);
+    }
+    if removed.is_empty() {
+        return Err(AppError::NoOp("PATH has no missing entries".into()));
     }
     let plural = if removed.len() == 1 { "y" } else { "ies" };
     confirm(g, &format!("prune {} missing entr{plural}", removed.len()))?;
@@ -194,12 +201,12 @@ pub fn move_entry(
     pathops::reorder(&mut entries, from, to)
         .map_err(|e| AppError::Usage(e.to_string()))?;
     let after_raw = entries.join(";");
-    if after_raw == before_raw {
-        return Err(AppError::NoOp("entry already at that position".into()));
-    }
     if g.dry_run {
         print_changes(g.json, &pathops::parse(&before_raw), &entries);
         return Ok(0);
+    }
+    if after_raw == before_raw {
+        return Err(AppError::NoOp("entry already at that position".into()));
     }
     confirm(g, &format!("move entry {from} to position {to}"))?;
     if commit(

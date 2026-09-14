@@ -293,9 +293,12 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
     let data: ImportFile =
         serde_json::from_str(&text).map_err(|e| AppError::Usage(format!("invalid export JSON: {e}")))?;
 
-    // Read-only plan first: exit 4 when nothing would change (like every
-    // other command's NoOp), and only prompt when there is real work.
-    if import_plan_count(reg, scopes, &data)? == 0 {
+    // Read-only plan first: it validates the whole file (value types included)
+    // and tells us whether a real run would have anything to do.
+    let planned = import_plan_count(reg, scopes, &data)?;
+    // A real run with nothing to do is a no-op; a dry run previews either way
+    // and exits 0.
+    if !g.dry_run && planned == 0 {
         return Err(AppError::NoOp("import: nothing to change".into()));
     }
 
@@ -305,7 +308,7 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
         confirm(g, "import")?;
     }
 
-    let mut planned = 0usize;
+    let mut applied = 0usize;
     // Per-item reports accumulate so stdout stays a single JSON document: the
     // dry run prints them as an array, the apply pass reports what it changed.
     let mut item_docs: Vec<serde_json::Value> = Vec::new();
@@ -339,7 +342,7 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
             }
             return Ok(Committed::Written);
         }
-        planned += 1;
+        applied += 1;
         let committed = commit(
             reg,
             g,
@@ -405,7 +408,7 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
         if !var_import_changes(current, var) {
             continue;
         }
-        planned += 1;
+        applied += 1;
         // Delegation cannot happen for user scope, but propagate honestly.
         let before_raw = state.current.as_ref().map(|v| v.raw.as_str()).unwrap_or_default();
         let before = state.current.as_ref().map(|v| (v.raw.as_str(), &v.ty));
@@ -437,13 +440,13 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
             "{}",
             serde_json::to_string(&serde_json::json!({
                 "action": "import",
-                "applied": planned,
+                "applied": applied,
                 "changes": item_docs,
             }))
             .expect("serialize")
         );
     } else {
-        println!("import complete ({planned} change(s) applied)");
+        println!("import complete ({applied} change(s) applied)");
     }
     Ok(0)
 }

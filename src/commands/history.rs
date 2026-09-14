@@ -32,15 +32,19 @@ pub fn undo(
     to: Option<usize>,
 ) -> Result<u8> {
     let snaps = snapshots_filtered(scope_filter, kind)?;
-    let target = match to {
-        Some(i) => i
-            .checked_sub(1)
-            .and_then(|idx| snaps.get(idx))
-            .ok_or_else(|| AppError::Usage(format!("no snapshot {i}")))?,
-        None => snaps
-            .last()
-            .ok_or_else(|| AppError::NoOp("nothing to undo".into()))?,
+    let target: Option<&Snapshot> = match to {
+        Some(i) => Some(
+            i.checked_sub(1)
+                .and_then(|idx| snaps.get(idx))
+                .ok_or_else(|| AppError::Usage(format!("no snapshot {i}")))?,
+        ),
+        None => snaps.last(),
     };
+    if target.is_none() && g.dry_run {
+        // A dry run previews, even when there is nothing to preview.
+        return Ok(0);
+    }
+    let target = target.ok_or_else(|| AppError::NoOp("nothing to undo".into()))?;
     let scope = match target.scope.as_str() {
         "system" => Scope::System,
         "user" => Scope::User,
@@ -67,9 +71,11 @@ pub fn undo(
     let before_raw = current.as_ref().map(|v| v.raw.clone()).unwrap_or_default();
 
     if g.dry_run {
-        let before = pathops::parse(&before_raw);
-        let after = pathops::parse(&restore_raw);
-        print_changes(g.json, &before, &after);
+        print_changes(
+            g.json,
+            &entries_of(&name, &before_raw),
+            &entries_of(&name, &restore_raw),
+        );
         return Ok(0);
     }
     confirm(g, &format!("undo '{}' ({})", target.command, target.ts))?;

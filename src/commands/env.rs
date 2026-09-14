@@ -37,14 +37,14 @@ pub fn env_set(
 ) -> Result<u8> {
     valid_var_name(name)?;
     let current = reg.read_var(scope, name)?;
-    let before_raw = current.as_ref().map(|v| v.raw.clone()).unwrap_or_default();
+    let before_raw = current.as_ref().map(|v| v.raw.as_str()).unwrap_or_default();
+    // A dry run is a preview: report and exit 0 even when nothing would change.
+    if g.dry_run {
+        print_changes(g.json, &entries_of(name, before_raw), &entries_of(name, value));
+        return Ok(0);
+    }
     if before_raw == value {
         return Err(AppError::NoOp(format!("{name} is already set to that value")));
-    }
-    if g.dry_run {
-        let before: Vec<String> = if before_raw.is_empty() { vec![] } else { vec![before_raw.clone()] };
-        print_changes(g.json, &before, &[value.to_string()]);
-        return Ok(0);
     }
     confirm(g, &format!("set {name}"))?;
     let ty = current
@@ -57,28 +57,27 @@ pub fn env_set(
     {
         return Ok(0);
     }
-    report_mutation(g, scope, name, "set", &before_raw, value, &format!("set: {name}"));
+    report_mutation(g, scope, name, "set", before_raw, value, &format!("set: {name}"));
     Ok(0)
 }
 
 pub fn env_delete(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Result<u8> {
     valid_var_name(name)?;
     let current = reg.read_var(scope, name)?;
-    if current.is_none() {
-        return Err(AppError::NoOp(format!("{name} is not set")));
-    }
+    let before_raw = current.as_ref().map(|v| v.raw.as_str()).unwrap_or_default();
     if g.dry_run {
-        let before = vec![current.as_ref().unwrap().raw.clone()];
-        print_changes(g.json, &before, &[]);
+        print_changes(g.json, &entries_of(name, before_raw), &[]);
         return Ok(0);
     }
+    let Some(current) = current else {
+        return Err(AppError::NoOp(format!("{name} is not set")));
+    };
     confirm(g, &format!("delete {name}"))?;
-    let before = current.as_ref().map(|v| (v.raw.as_str(), &v.ty));
+    let before = Some((current.raw.as_str(), &current.ty));
     if commit(reg, g, scope, name, before, None, &format!("delete {name}"))? == Committed::Delegated
     {
         return Ok(0);
     }
-    let before_raw = current.as_ref().map(|v| v.raw.as_str()).unwrap_or_default();
-    report_mutation(g, scope, name, "delete", before_raw, "", &format!("deleted: {name}"));
+    report_mutation(g, scope, name, "delete", &current.raw, "", &format!("deleted: {name}"));
     Ok(0)
 }
