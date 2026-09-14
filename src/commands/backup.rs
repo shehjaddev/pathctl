@@ -296,35 +296,169 @@ fn var_import_state(reg: &Registry, var: &BackupVar) -> Result<Option<BackupVarS
     Ok(Some(BackupVarState { current, ty }))
 }
 
-/// Count the changes an import would apply, without writing anything.
-/// Mirrors the apply logic below (value and type per item).
-fn import_plan_count(reg: &Registry, scopes: &[Scope], data: &BackupFile) -> Result<usize> {
-    let mut n = 0;
+/// One change an import would make, resolved against the registry. Everything
+/// needed to preview it, apply it and report it lives here, so the dry run and
+/// the apply pass cannot disagree about what a file means.
+enum Planned {
+    Path {
+        scope: Scope,
+        before: String,
+        before_ty: RegType,
+        after: String,
+        after_ty: RegType,
+    },
+    Var {
+        name: String,
+        before: Option<PathValue>,
+        after: String,
+        ty: RegType,
+    },
+}
+
+/// The value a planned variable holds now; empty means it is not set.
+fn before_raw(before: &Option<PathValue>) -> &str {
+    before.as_ref().map(|v| v.raw.as_str()).unwrap_or_default()
+}
+
+impl Planned {
+    /// The JSON document describing this change.
+    fn doc(&self) -> serde_json::Value {
+        match self {
+            Planned::Path {
+                scope,
+                before,
+                before_ty,
+                after,
+                after_ty,
+            } => import_path_doc(*scope, before, after, before_ty, after_ty),
+            Planned::Var {
+                name,
+                before,
+                after,
+                ..
+            } => import_var_doc(name, before_raw(before), after),
+        }
+    }
+
+    /// The human preview of this change.
+    fn preview(&self) {
+        match self {
+            Planned::Path {
+                scope,
+                before,
+                before_ty,
+                after,
+                after_ty,
+            } => {
+                if before == after {
+                    println!(
+                        "~ Path [{}] (type {} -> {})",
+                        scope.label(),
+                        ty_name(before_ty),
+                        ty_name(after_ty)
+                    );
+                } else {
+                    print_changes(false, &pathops::parse(before), &pathops::parse(after));
+                }
+            }
+            Planned::Var {
+                name,
+                before,
+                after,
+                ty,
+            } => {
+                let raw = before_raw(before);
+                if raw == after {
+                    let old = before
+                        .as_ref()
+                        .map(|v| ty_name(&v.ty))
+                        .unwrap_or_else(|| "(unset)".to_string());
+                    println!("~ {name} (type {old} -> {})", ty_name(ty));
+                } else {
+                    print_changes(false, &[raw.to_string()], std::slice::from_ref(after));
+                }
+            }
+        }
+    }
+
+    /// Apply the change; `Delegated` means an elevated child took over.
+    fn apply(&self, reg: &Registry, g: &Global) -> Result<Committed> {
+        match self {
+            Planned::Path {
+                scope,
+                before,
+                before_ty,
+                after,
+                after_ty,
+            } => commit(
+                reg,
+                g,
+                *scope,
+                registry::PATH_VALUE,
+                Some((before, before_ty)),
+                Some((after, after_ty)),
+                "import",
+            ),
+            Planned::Var {
+                name,
+                before,
+                after,
+                ty,
+            } => commit(
+                reg,
+                g,
+                Scope::User,
+                name,
+                before.as_ref().map(|v| (v.raw.as_str(), &v.ty)),
+                Some((after, ty)),
+                "import",
+            ),
+        }
+    }
+}
+
+/// Resolve a backup file into the changes it would make, validating every entry
+/// as it goes (value types included). Empty means there is nothing to do.
+fn plan_changes(reg: &Registry, scopes: &[Scope], data: &BackupFile) -> Result<Vec<Planned>> {
+    let mut planned = Vec::new();
     for (scope, value) in [
         (Scope::User, data.path.user.as_ref()),
         (Scope::System, data.path.system.as_ref()),
-    ]
-    .into_iter()
-    .filter_map(|(s, v)| v.map(|v| (s, v)))
-    .filter(|(s, _)| scopes.contains(s))
-    {
-        let (before_raw, before_ty, write_ty) = path_import_state(reg, scope, value)?;
-        if before_raw != value.value || before_ty != write_ty {
-            n += 1;
-        }
-    }
-    if !scopes.contains(&Scope::User) {
-        return Ok(n);
-    }
-    for var in &data.variables.user {
-        let Some(state) = var_import_state(reg, var)? else {
+    ] {
+        let Some(value) = value else {
             continue;
         };
-        if var_import_changes(state.current.as_ref(), var) {
-            n += 1;
+        if !scopes.contains(&scope) {
+            continue;
+        }
+        let (before, before_ty, after_ty) = path_import_state(reg, scope, value)?;
+        if before != value.value || before_ty != after_ty {
+            planned.push(Planned::Path {
+                scope,
+                before,
+                before_ty,
+                after: value.value.clone(),
+                after_ty,
+            });
         }
     }
-    Ok(n)
+    // Variable entries are user-scope only; `--scope system` skips them.
+    if scopes.contains(&Scope::User) {
+        for var in &data.variables.user {
+            let Some(state) = var_import_state(reg, var)? else {
+                continue;
+            };
+            if var_import_changes(state.current.as_ref(), var) {
+                planned.push(Planned::Var {
+                    name: var.name.clone(),
+                    before: state.current,
+                    after: var.value.clone(),
+                    ty: state.ty,
+                });
+            }
+        }
+    }
+    Ok(planned)
 }
 
 /// Import merges: nothing existing is deleted, and no write may truncate
@@ -336,12 +470,12 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
         .map_err(|e| AppError::Usage(format!("invalid export JSON: {e}")))?;
     data.check_origin()?;
 
-    // Read-only plan first: it validates the whole file (value types included)
-    // and tells us whether a real run would have anything to do.
-    let planned = import_plan_count(reg, scopes, &data)?;
+    // Resolve the file first: this validates every entry and says whether a
+    // real run would have anything to do.
+    let planned = plan_changes(reg, scopes, &data)?;
     // A real run with nothing to do is a no-op; a dry run previews either way
     // and exits 0.
-    if !g.dry_run && planned == 0 {
+    if !g.dry_run && planned.is_empty() {
         return Err(AppError::NoOp("import: nothing to change".into()));
     }
 
@@ -351,138 +485,32 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
         confirm(g, "import")?;
     }
 
-    let mut applied = 0usize;
-    // Per-item reports accumulate so stdout stays a single JSON document: the
-    // dry run prints them as an array, the apply pass reports what it changed.
-    let mut item_docs: Vec<serde_json::Value> = Vec::new();
-    let mut apply_path = |scope: Scope, value: &BackupValue| -> Result<Committed> {
-        let (before_raw, before_ty, write_ty) = path_import_state(reg, scope, value)?;
-        if before_raw == value.value && before_ty == write_ty {
-            return Ok(Committed::Written);
-        }
-        if g.dry_run {
-            if g.json {
-                item_docs.push(import_path_doc(
-                    scope,
-                    &before_raw,
-                    &value.value,
-                    &before_ty,
-                    &write_ty,
-                ));
-            } else if before_raw == value.value {
-                println!(
-                    "~ Path [{}] (type {} -> {})",
-                    scope.label(),
-                    ty_name(&before_ty),
-                    ty_name(&write_ty)
-                );
-            } else {
-                print_changes(
-                    false,
-                    &pathops::parse(&before_raw),
-                    &pathops::parse(&value.value),
-                );
-            }
-            return Ok(Committed::Written);
-        }
-        applied += 1;
-        let committed = commit(
-            reg,
-            g,
-            scope,
-            registry::PATH_VALUE,
-            Some((&before_raw, &before_ty)),
-            Some((&value.value, &write_ty)),
-            "import",
-        )?;
-        if committed == Committed::Written && g.json {
-            item_docs.push(import_path_doc(
-                scope,
-                &before_raw,
-                &value.value,
-                &before_ty,
-                &write_ty,
-            ));
-        }
-        Ok(committed)
-    };
-
-    if scopes.contains(&Scope::User)
-        && let Some(v) = &data.path.user
-        && apply_path(Scope::User, v)? == Committed::Delegated
-    {
-        return Ok(0);
-    }
-    if scopes.contains(&Scope::System)
-        && let Some(v) = &data.path.system
-        && apply_path(Scope::System, v)? == Committed::Delegated
-    {
-        return Ok(0);
-    }
-    // Variable entries are user-scope only; `--scope system` skips them.
-    let vars: &[BackupVar] = if scopes.contains(&Scope::User) {
-        &data.variables.user
-    } else {
-        &[]
-    };
-    for var in vars {
-        let Some(state) = var_import_state(reg, var)? else {
-            continue;
-        };
-        let current = state.current.as_ref();
-        if g.dry_run {
-            if var_import_changes(current, var) {
-                let before = current.map(|v| v.raw.clone()).unwrap_or_default();
-                if g.json {
-                    item_docs.push(import_var_doc(&var.name, &before, &var.value));
-                } else if before == var.value {
-                    let old = current
-                        .map(|v| ty_name(&v.ty))
-                        .unwrap_or("(unset)".to_string());
-                    println!("~ {} (type {old} -> {})", var.name, ty_name(&state.ty));
-                } else {
-                    print_changes(
-                        false,
-                        std::slice::from_ref(&before),
-                        std::slice::from_ref(&var.value),
-                    );
-                }
-            }
-            continue;
-        }
-        if !var_import_changes(current, var) {
-            continue;
-        }
-        applied += 1;
-        // Delegation cannot happen for user scope, but propagate honestly.
-        let before_raw = state
-            .current
-            .as_ref()
-            .map(|v| v.raw.as_str())
-            .unwrap_or_default();
-        let before = state.current.as_ref().map(|v| (v.raw.as_str(), &v.ty));
-        let committed = commit(
-            reg,
-            g,
-            Scope::User,
-            &var.name,
-            before,
-            Some((&var.value, &state.ty)),
-            "import",
-        )?;
-        if committed == Committed::Written && g.json {
-            item_docs.push(import_var_doc(&var.name, before_raw, &var.value));
-        }
-        if committed == Committed::Delegated {
-            return Ok(0);
-        }
-    }
+    // Per-item reports accumulate so stdout stays a single JSON document.
+    let mut docs: Vec<serde_json::Value> = Vec::new();
     if g.dry_run {
+        for change in &planned {
+            if g.json {
+                docs.push(change.doc());
+            } else {
+                change.preview();
+            }
+        }
         // Nothing was applied, so the report is just the list of changes.
         if g.json {
-            println!("{}", serde_json::to_string(&item_docs).expect("serialize"));
+            println!("{}", serde_json::to_string(&docs).expect("serialize"));
         }
         return Ok(0);
+    }
+
+    let mut applied = 0usize;
+    for change in &planned {
+        if change.apply(reg, g)? == Committed::Delegated {
+            return Ok(0);
+        }
+        applied += 1;
+        if g.json {
+            docs.push(change.doc());
+        }
     }
     if g.json {
         println!(
@@ -490,7 +518,7 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
             serde_json::to_string(&serde_json::json!({
                 "action": "import",
                 "applied": applied,
-                "changes": item_docs,
+                "changes": docs,
             }))
             .expect("serialize")
         );
