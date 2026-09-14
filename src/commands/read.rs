@@ -2,11 +2,37 @@
 
 use super::*;
 
+/// Why `list` flagged an entry. Serialized as a stable string for `--json`,
+/// and mapped to the one-character marker the human output prints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum EntryFlag {
+    /// A `%VAR%` reference was expanded.
+    Expanded,
+    /// A `%VAR%` reference did not resolve.
+    Unresolvable,
+    /// The directory does not exist.
+    Missing,
+    /// An earlier entry points at the same directory.
+    Dup,
+}
+
+impl EntryFlag {
+    fn marker(self) -> char {
+        match self {
+            EntryFlag::Expanded => 'e',
+            EntryFlag::Unresolvable => '%',
+            EntryFlag::Missing => '!',
+            EntryFlag::Dup => 'd',
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct EntryOut {
     index: usize,
     entry: String,
-    flags: Vec<&'static str>,
+    flags: Vec<EntryFlag>,
 }
 
 #[derive(Serialize)]
@@ -31,16 +57,16 @@ pub fn list(reg: &Registry, g: &Global, scopes: &[Scope], raw: bool) -> Result<u
             let analysis = analyze_entry(entry);
             let mut flags = Vec::new();
             if !raw && analysis.expanded {
-                flags.push("expanded");
+                flags.push(EntryFlag::Expanded);
             }
             if analysis.unresolvable {
-                flags.push("unresolvable");
+                flags.push(EntryFlag::Unresolvable);
             }
             if analysis.missing {
-                flags.push("missing");
+                flags.push(EntryFlag::Missing);
             }
             if dups[i] {
-                flags.push("dup");
+                flags.push(EntryFlag::Dup);
             }
             rows.push(EntryOut {
                 index: i + 1,
@@ -62,16 +88,7 @@ pub fn list(reg: &Registry, g: &Global, scopes: &[Scope], raw: bool) -> Result<u
                 println!("{} PATH ({} entries):", so.scope, so.entries.len());
             }
             for e in &so.entries {
-                let flags: String = e
-                    .flags
-                    .iter()
-                    .map(|f| match *f {
-                        "missing" => "!",
-                        "dup" => "d",
-                        "unresolvable" => "%",
-                        _ => "e",
-                    })
-                    .collect();
+                let flags: String = e.flags.iter().map(|f| f.marker()).collect();
                 let suffix = if flags.is_empty() {
                     String::new()
                 } else {
