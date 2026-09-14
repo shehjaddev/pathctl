@@ -170,6 +170,35 @@ fn path_import_state(
     Ok((before_raw, before_ty, write_ty))
 }
 
+/// One imported PATH value as it appears in the JSON report, including the
+/// registry type the import would write.
+fn import_path_doc(
+    scope: Scope,
+    before: &str,
+    after: &str,
+    ty_before: &RegType,
+    ty_after: &RegType,
+) -> serde_json::Value {
+    serde_json::json!({
+        "scope": scope.label(),
+        "name": "Path",
+        "before": pathops::parse(before),
+        "after": pathops::parse(after),
+        "ty_before": registry::reg_type_to_u32(ty_before.clone()),
+        "ty_after": registry::reg_type_to_u32(ty_after.clone()),
+    })
+}
+
+/// One imported variable as it appears in the JSON report.
+fn import_var_doc(name: &str, before: &str, after: &str) -> serde_json::Value {
+    serde_json::json!({
+        "scope": "user",
+        "name": name,
+        "before": entries_of(name, before),
+        "after": entries_of(name, after),
+    })
+}
+
 /// Would importing `var` change anything? Mirrors `env set` conventions:
 /// an unset variable with an empty value is a no-op.
 fn var_import_changes(current: Option<&PathValue>, var: &ImportVar) -> bool {
@@ -277,9 +306,9 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
     }
 
     let mut planned = 0usize;
-    // Dry-run JSON accumulates into one document; the per-item printer emits
-    // one document per change, which would concatenate on stdout.
-    let mut dry_changes: Vec<serde_json::Value> = Vec::new();
+    // Per-item reports accumulate so stdout stays a single JSON document: the
+    // dry run prints them as an array, the apply pass reports what it changed.
+    let mut item_docs: Vec<serde_json::Value> = Vec::new();
     let mut apply_path = |scope: Scope, value: &ImportValue| -> Result<Committed> {
         let (before_raw, before_ty, write_ty) = path_import_state(reg, scope, value)?;
         if before_raw == value.value && before_ty == write_ty {
@@ -287,14 +316,13 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
         }
         if g.dry_run {
             if g.json {
-                dry_changes.push(serde_json::json!({
-                    "scope": scope.label(),
-                    "name": "Path",
-                    "before": pathops::parse(&before_raw),
-                    "after": pathops::parse(&value.value),
-                    "ty_before": registry::reg_type_to_u32(before_ty.clone()),
-                    "ty_after": registry::reg_type_to_u32(write_ty.clone()),
-                }));
+                item_docs.push(import_path_doc(
+                    scope,
+                    &before_raw,
+                    &value.value,
+                    &before_ty,
+                    &write_ty,
+                ));
             } else if before_raw == value.value {
                 println!(
                     "~ Path [{}] (type {} -> {})",
@@ -312,7 +340,7 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
             return Ok(Committed::Written);
         }
         planned += 1;
-        commit(
+        let committed = commit(
             reg,
             g,
             scope,
@@ -320,7 +348,17 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
             Some((&before_raw, &before_ty)),
             Some((&value.value, &write_ty)),
             "import",
-        )
+        )?;
+        if committed == Committed::Written && g.json {
+            item_docs.push(import_path_doc(
+                scope,
+                &before_raw,
+                &value.value,
+                &before_ty,
+                &write_ty,
+            ));
+        }
+        Ok(committed)
     };
 
     if scopes.contains(&Scope::User)
@@ -350,12 +388,7 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
             if var_import_changes(current, var) {
                 let before = current.map(|v| v.raw.clone()).unwrap_or_default();
                 if g.json {
-                    dry_changes.push(serde_json::json!({
-                        "scope": "user",
-                        "name": var.name,
-                        "before": [before],
-                        "after": [var.value],
-                    }));
+                    item_docs.push(import_var_doc(&var.name, &before, &var.value));
                 } else if before == var.value {
                     let old = current.map(|v| ty_name(&v.ty)).unwrap_or("(unset)".to_string());
                     println!("~ {} (type {old} -> {})", var.name, ty_name(&state.ty));
@@ -374,8 +407,9 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
         }
         planned += 1;
         // Delegation cannot happen for user scope, but propagate honestly.
+        let before_raw = state.current.as_ref().map(|v| v.raw.as_str()).unwrap_or_default();
         let before = state.current.as_ref().map(|v| (v.raw.as_str(), &v.ty));
-        if commit(
+        let committed = commit(
             reg,
             g,
             Scope::User,
@@ -383,14 +417,32 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
             before,
             Some((&var.value, &state.ty)),
             "import",
-        )? == Committed::Delegated
-        {
+        )?;
+        if committed == Committed::Written && g.json {
+            item_docs.push(import_var_doc(&var.name, before_raw, &var.value));
+        }
+        if committed == Committed::Delegated {
             return Ok(0);
         }
     }
-    if g.json && g.dry_run {
-        println!("{}", serde_json::to_string(&dry_changes).expect("serialize"));
-    } else if !g.json && !g.dry_run {
+    if g.dry_run {
+        // Nothing was applied, so the report is just the list of changes.
+        if g.json {
+            println!("{}", serde_json::to_string(&item_docs).expect("serialize"));
+        }
+        return Ok(0);
+    }
+    if g.json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "action": "import",
+                "applied": planned,
+                "changes": item_docs,
+            }))
+            .expect("serialize")
+        );
+    } else {
         println!("import complete ({planned} change(s) applied)");
     }
     Ok(0)

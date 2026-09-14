@@ -43,9 +43,7 @@ pub fn add(
     {
         return Ok(0);
     }
-    if !g.json {
-        println!("added: {entry}");
-    }
+    report_mutation(g, scope, "Path", "add", &before_raw, &after_raw, &format!("added: {entry}"));
     Ok(0)
 }
 
@@ -88,9 +86,15 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
     {
         return Ok(0);
     }
-    if !g.json {
-        println!("removed: {removed}");
-    }
+    report_mutation(
+        g,
+        scope,
+        "Path",
+        "remove",
+        &before_raw,
+        &after_raw,
+        &format!("removed: {removed}"),
+    );
     Ok(0)
 }
 
@@ -119,12 +123,15 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
     {
         return Ok(0);
     }
-    if !g.json {
-        println!(
-            "deduped: removed {} duplicate(s)",
-            before.len() - after.len()
-        );
-    }
+    report_mutation(
+        g,
+        scope,
+        "Path",
+        "dedupe",
+        &before_raw,
+        &after_raw,
+        &format!("deduped: removed {} duplicate(s)", before.len() - after.len()),
+    );
     Ok(0)
 }
 
@@ -152,14 +159,8 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         print_changes(g.json, &before, &kept);
         return Ok(0);
     }
-    confirm(
-        g,
-        &format!(
-            "prune {} missing entr{}",
-            removed.len(),
-            if removed.len() == 1 { "y" } else { "ies" }
-        ),
-    )?;
+    let plural = if removed.len() == 1 { "y" } else { "ies" };
+    confirm(g, &format!("prune {} missing entr{plural}", removed.len()))?;
     if commit(
         reg,
         g,
@@ -172,16 +173,12 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
     {
         return Ok(0);
     }
-    if !g.json {
-        for e in &removed {
-            println!("- {e}");
-        }
-        println!(
-            "pruned: {} missing entr{}",
-            removed.len(),
-            if removed.len() == 1 { "y" } else { "ies" }
-        );
+    let mut summary = String::new();
+    for e in &removed {
+        summary.push_str(&format!("- {e}\n"));
     }
+    summary.push_str(&format!("pruned: {} missing entr{plural}", removed.len()));
+    report_mutation(g, scope, "Path", "prune", &before_raw, &after_raw, &summary);
     Ok(0)
 }
 
@@ -217,9 +214,15 @@ pub fn move_entry(
     {
         return Ok(0);
     }
-    if !g.json {
-        println!("moved: {from} -> {to}");
-    }
+    report_mutation(
+        g,
+        scope,
+        "Path",
+        "move",
+        &before_raw,
+        &after_raw,
+        &format!("moved: {from} -> {to}"),
+    );
     Ok(0)
 }
 

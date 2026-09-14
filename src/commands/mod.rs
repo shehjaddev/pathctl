@@ -175,6 +175,57 @@ struct ChangesOut<'a> {
     changes: &'a [Change],
 }
 
+/// The entry list a result reports: PATH entries, or the single value of a
+/// variable. Empty means "not set".
+fn entries_of(name: &str, value: &str) -> Vec<String> {
+    if name == "Path" {
+        pathops::parse(value)
+    } else if value.is_empty() {
+        Vec::new()
+    } else {
+        vec![value.to_string()]
+    }
+}
+
+#[derive(Serialize)]
+struct MutationOut<'a> {
+    scope: &'a str,
+    name: &'a str,
+    action: &'a str,
+    before: &'a [String],
+    after: &'a [String],
+    changes: &'a [Change],
+}
+
+/// Report one applied mutation: a JSON document under `--json`, the human
+/// `summary` line otherwise.
+fn report_mutation(
+    g: &Global,
+    scope: Scope,
+    name: &str,
+    action: &str,
+    before: &str,
+    after: &str,
+    summary: &str,
+) {
+    if !g.json {
+        println!("{summary}");
+        return;
+    }
+    let before = entries_of(name, before);
+    let after = entries_of(name, after);
+    let changes = pathops::diff_entries(&before, &after);
+    let out = MutationOut {
+        scope: scope.label(),
+        name,
+        action,
+        before: &before,
+        after: &after,
+        changes: &changes,
+    };
+    println!("{}", serde_json::to_string(&out).expect("serialize"));
+}
+
 /// Refuse writes that would exceed the 32,767-char environment-variable limit
 /// (spec §4). Counted in UTF-16 units, matching the registry's storage.
 fn guard_length(name: &str, value: &str) -> Result<()> {

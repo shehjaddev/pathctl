@@ -107,9 +107,15 @@ pub fn undo(
     if !g.no_broadcast {
         notify::broadcast_environment();
     }
-    if !g.json {
-        println!("restored {} ({})", name, target.command);
-    }
+    report_mutation(
+        g,
+        scope,
+        &name,
+        "undo",
+        &before_raw,
+        &restore_raw,
+        &format!("restored {name} ({})", target.command),
+    );
     Ok(0)
 }
 

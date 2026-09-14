@@ -57,9 +57,7 @@ pub fn env_set(
     {
         return Ok(0);
     }
-    if !g.json {
-        println!("set: {name}");
-    }
+    report_mutation(g, scope, name, "set", &before_raw, value, &format!("set: {name}"));
     Ok(0)
 }
 
@@ -80,8 +78,7 @@ pub fn env_delete(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Resul
     {
         return Ok(0);
     }
-    if !g.json {
-        println!("deleted: {name}");
-    }
+    let before_raw = current.as_ref().map(|v| v.raw.as_str()).unwrap_or_default();
+    report_mutation(g, scope, name, "delete", before_raw, "", &format!("deleted: {name}"));
     Ok(0)
 }

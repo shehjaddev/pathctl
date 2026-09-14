@@ -1099,6 +1099,73 @@ fn export_refuses_non_windows_output_path() {
 }
 
 #[test]
+fn mutations_report_json() {
+    let dir = setup("json_mut");
+    let entry = r"C:\pathctl-jsonmut";
+    // Every mutating command answers --json with one parseable document; the
+    // non-JSON path is unaffected.
+    let out = pathctl("json_mut", dir.path())
+        .arg("add")
+        .arg(entry)
+        .arg("--json")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("add --json document");
+    assert_eq!(v["action"], "add");
+    assert_eq!(v["name"], "Path");
+    assert_eq!(v["scope"], "user");
+    assert_eq!(v["after"][0], entry);
+    assert_eq!(v["changes"][0]["added"], entry);
+
+    let out = pathctl("json_mut", dir.path())
+        .arg("env")
+        .arg("set")
+        .arg("PATHCTL_JSONMUT")
+        .arg("v")
+        .arg("--json")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("env set --json");
+    assert_eq!(v["action"], "set");
+    assert_eq!(v["name"], "PATHCTL_JSONMUT");
+    assert_eq!(v["after"][0], "v");
+
+    let out = pathctl("json_mut", dir.path())
+        .arg("undo")
+        .arg("--json")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("undo --json");
+    assert_eq!(v["action"], "undo");
+
+    let f = dir.path().join("imp.json");
+    let doc = serde_json::json!({
+        "tool": "pathctl",
+        "version": 1,
+        "path": { "user": null, "system": null },
+        "variables": { "user": [{ "name": "PATHCTL_JSONIMP", "value": "1", "ty": 1 }] },
+    });
+    std::fs::write(&f, serde_json::to_string(&doc).unwrap()).unwrap();
+    let out = pathctl("json_mut", dir.path())
+        .arg("import")
+        .arg(&f)
+        .arg("--json")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("import --json");
+    assert_eq!(v["action"], "import");
+    assert_eq!(v["applied"], 1);
+    assert_eq!(v["changes"][0]["name"], "PATHCTL_JSONIMP");
+
+    pathctl("json_mut", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("added"));
+}
+
+#[test]
 fn backup_scope_is_honoured() {
     let dir = setup("backup_scope");
     let entry = r"C:\pathctl-bscope";
