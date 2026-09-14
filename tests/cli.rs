@@ -1084,6 +1084,74 @@ fn export_refuses_non_windows_output_path() {
 }
 
 #[test]
+fn backup_scope_is_honoured() {
+    let dir = setup("backup_scope");
+    let entry = r"C:\pathctl-bscope";
+    pathctl("backup_scope", dir.path())
+        .arg("add")
+        .arg(entry)
+        .assert()
+        .success();
+    // Default: both halves, as documented.
+    let out = pathctl("backup_scope", dir.path())
+        .arg("export")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("export JSON");
+    assert!(v["path"]["user"]["value"].as_str().unwrap().contains(entry));
+    // `--scope system` must leave the user half out (it used to be ignored).
+    let out = pathctl("backup_scope", dir.path())
+        .arg("export")
+        .arg("--scope")
+        .arg("system")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("export JSON");
+    assert!(
+        v["path"]["user"].is_null(),
+        "--scope system must not export the user PATH"
+    );
+    assert!(v["variables"]["user"].as_array().unwrap().is_empty());
+
+    // Import honours it too: user-scope content is skipped, so nothing changes.
+    let f = dir.path().join("user.json");
+    let doc = serde_json::json!({
+        "tool": "pathctl",
+        "version": 1,
+        "path": { "user": { "value": r"C:\pathctl-bscope-other", "ty": 2 }, "system": null },
+        "variables": { "user": [{ "name": "PATHCTL_BSCOPE", "value": "v", "ty": 1 }] },
+    });
+    std::fs::write(&f, serde_json::to_string(&doc).unwrap()).unwrap();
+    pathctl("backup_scope", dir.path())
+        .arg("import")
+        .arg(&f)
+        .arg("--scope")
+        .arg("system")
+        .assert()
+        .code(4);
+    pathctl("backup_scope", dir.path())
+        .arg("env")
+        .arg("get")
+        .arg("PATHCTL_BSCOPE")
+        .assert()
+        .code(4);
+    let out = pathctl("backup_scope", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .output()
+        .unwrap();
+    assert!(!stdout(&out).contains("bscope-other"), "user PATH untouched");
+
+    // An unknown scope is rejected here like everywhere else.
+    pathctl("backup_scope", dir.path())
+        .arg("export")
+        .arg("--scope")
+        .arg("bogus")
+        .assert()
+        .code(2);
+}
+
+#[test]
 fn import_rejects_bad_json() {
     let dir = setup("import_bad");
     let bad = dir.path().join("bad.json");

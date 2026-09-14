@@ -75,6 +75,26 @@ pub fn scopes_from(scope: Option<&str>, allow_all: bool) -> Result<Vec<Scope>> {
     }
 }
 
+/// The scope a mutating command operates on. `all` is read-only, so such a
+/// command always has exactly one scope.
+pub fn mutation_scope(scope: Option<&str>) -> Result<Scope> {
+    match scopes_from(scope, false)?.as_slice() {
+        [only] => Ok(*only),
+        // Unreachable: scopes_from rejects `all` and never returns an empty
+        // list, but stay honest instead of indexing.
+        _ => Err(AppError::Usage("expected a single scope".into())),
+    }
+}
+
+/// Scopes `export` and `import` cover: both by default, or exactly the one
+/// named by `--scope`.
+pub fn backup_scopes(scope: Option<&str>) -> Result<Vec<Scope>> {
+    match scope {
+        None => Ok(ALL_SCOPES.to_vec()),
+        Some(s) => scopes_from(Some(s), true),
+    }
+}
+
 fn current_path(reg: &Registry, scope: Scope) -> Result<(String, RegType)> {
     Ok(match reg.read_path(scope)? {
         Some(v) => (v.raw, v.ty),

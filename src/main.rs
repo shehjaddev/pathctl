@@ -10,7 +10,7 @@ mod util;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use commands::{Global, Result};
-use registry::{Registry, Scope};
+use registry::Registry;
 use std::process::ExitCode;
 
 #[derive(Parser)]
@@ -150,67 +150,71 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli, g: Global, reg: &Registry) -> Result<u8> {
-    let scope = |allow_all: bool| -> Result<Vec<Scope>> {
-        commands::scopes_from(cli.scope.as_deref(), allow_all)
-    };
+    let read_scopes = |allow_all: bool| commands::scopes_from(cli.scope.as_deref(), allow_all);
     match &cli.cmd {
         Cmd::List { raw } => {
-            let scopes = scope(true)?;
+            let scopes = read_scopes(true)?;
             commands::list(reg, &g, &scopes, *raw)
         }
         Cmd::Check => {
-            let scopes = scope(true)?;
+            let scopes = read_scopes(true)?;
             commands::check(reg, &g, &scopes)
         }
         Cmd::Add { dir, prepend, dedupe } => {
-            let scopes = scope(false)?;
-            commands::add(reg, &g, scopes[0], dir, *prepend, *dedupe)
+            let scope = commands::mutation_scope(cli.scope.as_deref())?;
+            commands::add(reg, &g, scope, dir, *prepend, *dedupe)
         }
         Cmd::Remove { target } => {
-            let scopes = scope(false)?;
-            commands::remove(reg, &g, scopes[0], target)
+            let scope = commands::mutation_scope(cli.scope.as_deref())?;
+            commands::remove(reg, &g, scope, target)
         }
         Cmd::Dedupe => {
-            let scopes = scope(false)?;
-            commands::dedupe(reg, &g, scopes[0])
+            let scope = commands::mutation_scope(cli.scope.as_deref())?;
+            commands::dedupe(reg, &g, scope)
         }
         Cmd::Prune => {
-            let scopes = scope(false)?;
-            commands::prune(reg, &g, scopes[0])
+            let scope = commands::mutation_scope(cli.scope.as_deref())?;
+            commands::prune(reg, &g, scope)
         }
         Cmd::Move { from, to } => {
-            let scopes = scope(false)?;
-            commands::move_entry(reg, &g, scopes[0], *from, *to)
+            let scope = commands::mutation_scope(cli.scope.as_deref())?;
+            commands::move_entry(reg, &g, scope, *from, *to)
         }
         Cmd::Undo { list, to, kind } => {
-            let scopes = scope(false)?; // undo accepts user/system only
+            let scope = commands::mutation_scope(cli.scope.as_deref())?;
             let kind = kind.map(|k| match k {
                 UndoKind::Path => commands::SnapshotKind::Path,
                 UndoKind::Env => commands::SnapshotKind::Var,
             });
             if *list {
-                commands::undo_list(&g, Some(scopes[0]), kind)
+                commands::undo_list(&g, Some(scope), kind)
             } else {
-                commands::undo(reg, &g, Some(scopes[0]), kind, *to)
+                commands::undo(reg, &g, Some(scope), kind, *to)
             }
         }
         Cmd::Diff { to } => {
-            let scopes = scope(true)?;
+            let scopes = read_scopes(true)?;
             commands::diff(reg, &g, &scopes, *to)
         }
-        Cmd::Export { output } => commands::export(reg, output.as_deref()),
-        Cmd::Import { file } => commands::import(reg, &g, file),
+        Cmd::Export { output } => {
+            let scopes = commands::backup_scopes(cli.scope.as_deref())?;
+            commands::export(reg, &scopes, output.as_deref())
+        }
+        Cmd::Import { file } => {
+            let scopes = commands::backup_scopes(cli.scope.as_deref())?;
+            commands::import(reg, &g, &scopes, file)
+        }
         Cmd::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(*shell, &mut cmd, "pathctl", &mut std::io::stdout());
             Ok(0)
         }
         Cmd::Env { cmd } => {
-            let scopes = scope(false)?;
+            let scope = commands::mutation_scope(cli.scope.as_deref())?;
             match cmd {
-                EnvCmd::Get { name } => commands::env_get(reg, &g, scopes[0], name),
-                EnvCmd::Set { name, value } => commands::env_set(reg, &g, scopes[0], name, value),
-                EnvCmd::Delete { name } => commands::env_delete(reg, &g, scopes[0], name),
+                EnvCmd::Get { name } => commands::env_get(reg, &g, scope, name),
+                EnvCmd::Set { name, value } => commands::env_set(reg, &g, scope, name, value),
+                EnvCmd::Delete { name } => commands::env_delete(reg, &g, scope, name),
             }
         }
     }

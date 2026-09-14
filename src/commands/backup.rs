@@ -49,8 +49,11 @@ fn check_output_path(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-pub fn export(reg: &Registry, output: Option<&std::path::Path>) -> Result<u8> {
+pub fn export(reg: &Registry, scopes: &[Scope], output: Option<&std::path::Path>) -> Result<u8> {
     let read = |scope: Scope| -> Result<Option<ExportValue>> {
+        if !scopes.contains(&scope) {
+            return Ok(None);
+        }
         match reg.read_path(scope)? {
             Some(v) => {
                 guard_text_type("Path", &v.ty)?;
@@ -64,23 +67,25 @@ pub fn export(reg: &Registry, output: Option<&std::path::Path>) -> Result<u8> {
     };
     let mut vars = Vec::new();
     let mut skipped = Vec::new();
-    for (name, v) in reg.enum_all(Scope::User)? {
-        // Path already lives in `path.*`; repeating it in `variables.user`
-        // exported the same value twice.
-        if name.eq_ignore_ascii_case("Path") {
-            continue;
+    if scopes.contains(&Scope::User) {
+        for (name, v) in reg.enum_all(Scope::User)? {
+            // Path already lives in `path.*`; repeating it in `variables.user`
+            // exported the same value twice.
+            if name.eq_ignore_ascii_case("Path") {
+                continue;
+            }
+            // Only strings fit the format; say so rather than writing a value
+            // that import would refuse (or worse, that would come back mangled).
+            if !registry::is_text_type(&v.ty) {
+                skipped.push(format!("{name} ({})", ty_name(&v.ty)));
+                continue;
+            }
+            vars.push(ExportVar {
+                name,
+                value: v.raw,
+                ty: registry::reg_type_to_u32(v.ty),
+            });
         }
-        // Only strings fit the format; say so rather than writing a value that
-        // import would refuse (or worse, that would come back mangled).
-        if !registry::is_text_type(&v.ty) {
-            skipped.push(format!("{name} ({})", ty_name(&v.ty)));
-            continue;
-        }
-        vars.push(ExportVar {
-            name,
-            value: v.raw,
-            ty: registry::reg_type_to_u32(v.ty),
-        });
     }
     if !skipped.is_empty() {
         eprintln!(
@@ -222,7 +227,7 @@ fn var_import_state(reg: &Registry, var: &ImportVar) -> Result<Option<ImportVarS
 
 /// Count the changes an import would apply, without writing anything.
 /// Mirrors the apply logic below (value and type per item).
-fn import_plan_count(reg: &Registry, data: &ImportFile) -> Result<usize> {
+fn import_plan_count(reg: &Registry, scopes: &[Scope], data: &ImportFile) -> Result<usize> {
     let mut n = 0;
     for (scope, value) in [
         (Scope::User, data.path.user.as_ref()),
@@ -230,11 +235,15 @@ fn import_plan_count(reg: &Registry, data: &ImportFile) -> Result<usize> {
     ]
     .into_iter()
     .filter_map(|(s, v)| v.map(|v| (s, v)))
+    .filter(|(s, _)| scopes.contains(s))
     {
         let (before_raw, before_ty, write_ty) = path_import_state(reg, scope, value)?;
         if before_raw != value.value || before_ty != write_ty {
             n += 1;
         }
+    }
+    if !scopes.contains(&Scope::User) {
+        return Ok(n);
     }
     for var in &data.variables.user {
         let Some(state) = var_import_state(reg, var)? else {
@@ -248,8 +257,8 @@ fn import_plan_count(reg: &Registry, data: &ImportFile) -> Result<usize> {
 }
 
 /// Import merges: nothing existing is deleted, and no write may truncate
-/// (the 32,767 guard applies per variable, spec §4).
-pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> {
+/// (the 32,767 guard applies per variable).
+pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Path) -> Result<u8> {
     let text = std::fs::read_to_string(file)
         .map_err(|e| AppError::Usage(format!("cannot read {}: {e}", file.display())))?;
     let data: ImportFile =
@@ -257,7 +266,7 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
 
     // Read-only plan first: exit 4 when nothing would change (like every
     // other command's NoOp), and only prompt when there is real work.
-    if import_plan_count(reg, &data)? == 0 {
+    if import_plan_count(reg, scopes, &data)? == 0 {
         return Err(AppError::NoOp("import: nothing to change".into()));
     }
 
@@ -306,17 +315,25 @@ pub fn import(reg: &Registry, g: &Global, file: &std::path::Path) -> Result<u8> 
         commit_path(reg, g, scope, &before_raw, before_ty, &value.value, write_ty, "import")
     };
 
-    if let Some(v) = &data.path.user
+    if scopes.contains(&Scope::User)
+        && let Some(v) = &data.path.user
         && apply_path(Scope::User, v)?
     {
         return Ok(0);
     }
-    if let Some(v) = &data.path.system
+    if scopes.contains(&Scope::System)
+        && let Some(v) = &data.path.system
         && apply_path(Scope::System, v)?
     {
         return Ok(0);
     }
-    for var in &data.variables.user {
+    // Variable entries are user-scope only; `--scope system` skips them.
+    let vars: &[ImportVar] = if scopes.contains(&Scope::User) {
+        &data.variables.user
+    } else {
+        &[]
+    };
+    for var in vars {
         let Some(state) = var_import_state(reg, var)? else {
             continue;
         };
