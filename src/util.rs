@@ -16,20 +16,41 @@ pub const LONG_PATH_FLAG: usize = 260;
 /// unchanged if expansion fails (unresolvable or overlong result).
 pub fn expand(s: &str) -> String {
     use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
+    // Most PATH entries hold no reference at all; there is nothing for Win32
+    // to substitute, so skip the call and its buffers entirely.
+    if !s.as_bytes().contains(&b'%') {
+        return s.to_string();
+    }
     let wide: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut buf = vec![0u16; MAX_ENV_VALUE + 1];
+    // Expand into a stack buffer first: entries are normally far shorter than
+    // this, and a 64 KiB heap buffer per entry showed up as allocation churn
+    // across `list`/`check` on a real PATH.
+    let mut buf = [0u16; 512];
     let n = unsafe {
         ExpandEnvironmentStringsW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32)
     };
     // n is the size required including the NUL. n == 0 means expansion failed;
-    // n > buf.len() means the result (or its NUL) does not fit the buffer —
-    // slicing buf[..n-1] there would panic. Both fall back to the input,
-    // matching the documented "unresolvable or overlong result" behavior.
-    if n > 0 && (n as usize) <= buf.len() {
-        String::from_utf16_lossy(&buf[..n as usize - 1])
-    } else {
-        s.to_string()
+    // n > buf.len() means the result did not fit, and slicing buf[..n-1] there
+    // would panic. An overlong result keeps the input, matching the documented
+    // "unresolvable or overlong result" behaviour and bounding the retry.
+    if n == 0 {
+        return s.to_string();
     }
+    let need = n as usize;
+    if need > MAX_ENV_VALUE + 1 {
+        return s.to_string();
+    }
+    if need <= buf.len() {
+        return String::from_utf16_lossy(&buf[..need - 1]);
+    }
+    let mut retry = vec![0u16; need];
+    let n = unsafe {
+        ExpandEnvironmentStringsW(wide.as_ptr(), retry.as_mut_ptr(), retry.len() as u32)
+    };
+    if n == 0 || (n as usize) > retry.len() {
+        return s.to_string();
+    }
+    String::from_utf16_lossy(&retry[..n as usize - 1])
 }
 
 /// True if `p` exists and is a directory. Does not resolve `%VAR%`.
@@ -77,6 +98,17 @@ mod tests {
         // Unique name; process-scoped on Windows, no cleanup needed.
         unsafe { std::env::set_var("PATHCTL_EXPAND_TEST", r"C:\resolved") };
         assert_eq!(expand("%PATHCTL_EXPAND_TEST%"), r"C:\resolved");
+    }
+
+    #[test]
+    fn expand_retries_with_a_larger_buffer() {
+        let big = "x".repeat(2_000);
+        unsafe { std::env::set_var("PATHCTL_EXPAND_BIG", &big) };
+        assert_eq!(expand("%PATHCTL_EXPAND_BIG%"), big);
+        assert_eq!(
+            expand(r"%PATHCTL_EXPAND_BIG%\tail"),
+            format!("{big}\\tail")
+        );
     }
 
     #[test]
