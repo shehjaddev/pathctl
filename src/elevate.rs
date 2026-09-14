@@ -6,6 +6,12 @@ use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
+/// The ASCII delimiters that matter for quoting, as UTF-16 units.
+const QUOTE: u16 = b'"' as u16;
+const BACKSLASH: u16 = b'\\' as u16;
+const SPACE: u16 = b' ' as u16;
+const TAB: u16 = b'\t' as u16;
+
 /// Quote an argument per the CommandLineToArgvW rules so the elevated child
 /// receives exactly the parent's argv (paths with spaces, quotes or trailing
 /// backslashes included). Plain tokens pass through untouched.
@@ -14,33 +20,30 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 /// hold unpaired surrogates, which `std::env::args()` would panic on.
 fn quote_arg(s: &OsStr) -> Vec<u16> {
     let units: Vec<u16> = s.encode_wide().collect();
-    let needs_quotes = units.is_empty()
-        || units
-            .iter()
-            .any(|u| *u == u16::from(b' ') || *u == u16::from(b'\t') || *u == u16::from(b'"'));
+    let needs_quotes = units.is_empty() || units.iter().any(|u| matches!(*u, SPACE | TAB | QUOTE));
     if !needs_quotes {
         return units;
     }
     let mut out = Vec::with_capacity(units.len() + 2);
-    out.push(u16::from(b'"'));
+    out.push(QUOTE);
     let mut backslashes = 0usize;
-    for u in units {
-        match u {
-            u if u == u16::from(b'\\') => backslashes += 1,
-            u if u == u16::from(b'"') => {
-                out.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes * 2 + 1));
-                out.push(u16::from(b'"'));
+    for unit in units {
+        match unit {
+            BACKSLASH => backslashes += 1,
+            QUOTE => {
+                out.extend(std::iter::repeat_n(BACKSLASH, backslashes * 2 + 1));
+                out.push(QUOTE);
                 backslashes = 0;
             }
             _ => {
-                out.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes));
-                out.push(u);
+                out.extend(std::iter::repeat_n(BACKSLASH, backslashes));
+                out.push(unit);
                 backslashes = 0;
             }
         }
     }
-    out.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes * 2));
-    out.push(u16::from(b'"'));
+    out.extend(std::iter::repeat_n(BACKSLASH, backslashes * 2));
+    out.push(QUOTE);
     out
 }
 
@@ -49,7 +52,7 @@ fn command_line<S: AsRef<OsStr>>(args: &[S]) -> Vec<u16> {
     let mut out = Vec::new();
     for (i, arg) in args.iter().enumerate() {
         if i > 0 {
-            out.push(u16::from(b' '));
+            out.push(SPACE);
         }
         out.extend(quote_arg(arg.as_ref()));
     }
@@ -92,28 +95,30 @@ pub fn relaunch_elevated() -> io::Result<()> {
     // (not GetLastError), so map them to messages directly.
     let code = res as isize;
     if code > 32 {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "elevation launch failed: {}",
-            match code {
-                0 => "out of memory".to_string(),
-                2 => "file not found".to_string(),
-                3 => "path not found".to_string(),
-                5 => "access denied (UAC declined?)".to_string(),
-                8 => "out of memory".to_string(),
-                11 => "invalid executable format".to_string(),
-                26 => "sharing violation".to_string(),
-                27 => "file association incomplete".to_string(),
-                28 => "DDE timeout".to_string(),
-                29 => "DDE transaction failed".to_string(),
-                30 => "DDE busy".to_string(),
-                31 => "no application associated".to_string(),
-                32 => "DLL not found".to_string(),
-                _ => format!("unknown error {code}"),
-            }
-        )))
+        return Ok(());
     }
+    let reason = match code {
+        0 | 8 => "out of memory",
+        2 => "file not found",
+        3 => "path not found",
+        5 => "access denied (UAC declined?)",
+        11 => "invalid executable format",
+        26 => "sharing violation",
+        27 => "file association incomplete",
+        28 => "DDE timeout",
+        29 => "DDE transaction failed",
+        30 => "DDE busy",
+        31 => "no application associated",
+        32 => "DLL not found",
+        _ => {
+            return Err(io::Error::other(format!(
+                "elevation launch failed: unknown error {code}"
+            )));
+        }
+    };
+    Err(io::Error::other(format!(
+        "elevation launch failed: {reason}"
+    )))
 }
 
 #[cfg(test)]
