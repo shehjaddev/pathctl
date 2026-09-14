@@ -82,6 +82,30 @@ fn current_path(reg: &Registry, scope: Scope) -> Result<(String, RegType)> {
     })
 }
 
+/// What `list`, `check` and `prune` need to know about one raw PATH entry.
+///
+/// Existence is decided on the unquoted, expanded form. Installers do write
+/// quoted entries (`"C:\Program Files\x"`), and treating those as missing
+/// would make `prune` delete a directory that exists.
+struct EntryAnalysis {
+    /// A `%VAR%` reference that did not resolve, so existence is unknown.
+    unresolvable: bool,
+    /// The target is not an existing directory.
+    missing: bool,
+    /// Expansion replaced at least one `%VAR%` reference.
+    expanded: bool,
+}
+
+fn analyze_entry(entry: &str) -> EntryAnalysis {
+    let unquoted = pathops::trim_quotes(entry);
+    let target = util::expand(unquoted);
+    EntryAnalysis {
+        unresolvable: util::has_var_ref(unquoted) && target == unquoted,
+        missing: !util::dir_exists(&target),
+        expanded: target != unquoted,
+    }
+}
+
 fn print_changes(json: bool, before: &[String], after: &[String]) {
     let changes = pathops::diff_entries(before, after);
     if json {

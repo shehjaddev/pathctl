@@ -101,18 +101,16 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
     Ok(0)
 }
 
-/// Remove PATH entries whose directories no longer exist (roadmap v2, spec
-/// §10). `%VAR%` references that cannot be resolved are kept — existence
-/// cannot be determined for them.
+/// Remove PATH entries whose directories no longer exist. `%VAR%` references
+/// that cannot be resolved are kept: existence cannot be determined for them.
 pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
     let (before_raw, before_ty) = current_path(reg, scope)?;
     let before = pathops::parse(&before_raw);
     let mut kept: Vec<String> = Vec::with_capacity(before.len());
     let mut removed: Vec<String> = Vec::new();
     for e in &before {
-        let expanded = util::expand(e);
-        let resolvable = !util::has_var_ref(e) || expanded != *e;
-        if resolvable && !util::dir_exists(&expanded) {
+        let analysis = analyze_entry(e);
+        if !analysis.unresolvable && analysis.missing {
             removed.push(e.clone());
         } else {
             kept.push(e.clone());

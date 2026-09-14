@@ -397,6 +397,54 @@ fn prune_dry_run_writes_nothing() {
         .stdout(predicate::str::contains(missing));
 }
 
+#[test]
+fn prune_keeps_quoted_entries_for_existing_directories() {
+    let dir = setup("prune_quoted");
+    let existing = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let quoted_missing = r"C:\pathctl-quoted-missing";
+    // `add` creates the key the direct write below needs.
+    pathctl("prune_quoted", dir.path())
+        .arg("add")
+        .arg(&existing)
+        .assert()
+        .success();
+    // Other installers write quoted entries; writing the value directly is the
+    // only way to get one past `add`, which trims quotes.
+    write_path_direct(
+        "prune_quoted",
+        &format!("\"{existing}\";\"{quoted_missing}\""),
+    );
+    // The existing directory must not be reported missing just because it is
+    // quoted -- `prune` used to delete it on that basis.
+    pathctl("prune_quoted", dir.path())
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(&existing).not())
+        .stdout(predicate::str::contains(quoted_missing));
+    pathctl("prune_quoted", dir.path())
+        .arg("prune")
+        .assert()
+        .success();
+    let out = pathctl("prune_quoted", dir.path())
+        .arg("list")
+        .arg("--raw")
+        .output()
+        .unwrap();
+    let text = stdout(&out);
+    assert!(
+        text.contains(&existing),
+        "quoted existing directory must be kept"
+    );
+    assert!(
+        !text.contains(quoted_missing),
+        "quoted missing directory must be pruned"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // undo / diff
 // ---------------------------------------------------------------------------

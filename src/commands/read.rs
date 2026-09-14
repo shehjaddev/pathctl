@@ -24,18 +24,18 @@ pub fn list(reg: &Registry, g: &Global, scopes: &[Scope], raw: bool) -> Result<u
         };
         let mut rows = Vec::new();
         for (i, entry) in entries.iter().enumerate() {
-            // Validation always runs on the expanded form: in `--raw` mode
-            // only the `expanded` flag is suppressed, so a resolvable
-            // `%VAR%` entry is not misreported as missing.
-            let expanded = util::expand(entry);
+            // Analysis always runs on the expanded form: in `--raw` mode only
+            // the `expanded` flag is suppressed, so a resolvable `%VAR%` entry
+            // is not misreported as missing.
+            let analysis = analyze_entry(entry);
             let mut flags = Vec::new();
-            if !raw && expanded != *entry {
+            if !raw && analysis.expanded {
                 flags.push("expanded");
             }
-            if util::has_var_ref(&expanded) && util::expand(&expanded) == expanded {
+            if analysis.unresolvable {
                 flags.push("unresolvable");
             }
-            if !util::dir_exists(&expanded) {
+            if analysis.missing {
                 flags.push("missing");
             }
             if entries[..i].iter().any(|e| pathops::eq(e, entry)) {
@@ -85,8 +85,14 @@ pub fn list(reg: &Registry, g: &Global, scopes: &[Scope], raw: bool) -> Result<u
 
 pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
     let mut findings: Vec<String> = Vec::new();
+    // Read each scope once: the entries pass and the combined-length pass below
+    // both need the raw value.
+    let mut values: Vec<(Scope, Option<PathValue>)> = Vec::with_capacity(scopes.len());
     for scope in scopes {
-        let entries = match reg.read_path(*scope)? {
+        values.push((*scope, reg.read_path(*scope)?));
+    }
+    for (scope, value) in &values {
+        let entries = match value {
             Some(v) => pathops::parse(&v.raw),
             None => Vec::new(),
         };
@@ -100,14 +106,14 @@ pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
             } else {
                 seen.push(entry.clone());
             }
-            let expanded = util::expand(entry);
-            if util::has_var_ref(entry) && expanded == *entry {
+            let analysis = analyze_entry(entry);
+            if analysis.unresolvable {
                 findings.push(format!(
                     "[{}] unresolvable variable reference: {entry}",
                     scope.label()
                 ));
             }
-            if !util::dir_exists(&expanded) {
+            if analysis.missing {
                 findings.push(format!(
                     "[{}] missing directory: {entry}",
                     scope.label()
@@ -123,8 +129,8 @@ pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
         }
     }
     // Near-limit warning for the combined value per scope.
-    for scope in scopes {
-        if let Some(v) = reg.read_path(*scope)? {
+    for (scope, value) in &values {
+        if let Some(v) = value {
             let units = v.raw.encode_utf16().count();
             if units > util::MAX_ENV_VALUE {
                 findings.push(format!(
