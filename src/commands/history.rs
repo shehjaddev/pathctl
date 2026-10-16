@@ -266,7 +266,7 @@ pub fn diff(reg: &Registry, g: &Global, scopes: &[Scope], to: Option<usize>) -> 
         }
     }
     if g.json {
-        // One document even with `--scope all` (was N concatenated objects).
+        // One document even with `--scope all`.
         println!("{}", serde_json::to_string(&docs).expect("serialize"));
     }
     Ok(if differs { 1 } else { 0 })

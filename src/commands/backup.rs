@@ -563,9 +563,9 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
         change.preflight()?;
     }
 
-    // Elevate the *whole* import up front rather than per item: a system write
-    // reached halfway through used to relaunch for that one value, leaving the
-    // user changes already applied. Decide once, before any write.
+    // Elevate the *whole* import up front rather than per item: elevating a
+    // system write reached halfway through would relaunch for that one value
+    // and leave the user changes already applied. Decide once, before any write.
     let needs_system = planned.iter().any(|c| {
         matches!(
             c,
