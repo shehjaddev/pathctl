@@ -15,6 +15,13 @@ pub fn add(
     if entry.is_empty() {
         return Err(AppError::Usage("empty PATH entry".into()));
     }
+    // One argument is one PATH entry; a `;` would silently add (or split into)
+    // several. Reject before any preview, confirmation or snapshot.
+    if entry.contains(';') {
+        return Err(AppError::Usage(format!(
+            "a PATH entry cannot contain ';': '{entry}'"
+        )));
+    }
     let (before_raw, before_ty) = current_path(reg, scope)?;
     let mut entries = pathops::parse(&before_raw);
     let already_present = dedupe && pathops::contains(&entries, &entry);

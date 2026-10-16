@@ -155,6 +155,22 @@ fn bare_drive_letter_is_not_the_drive_root() {
     pathctl("bare_drive", dir.path()).arg("dedupe").assert().code(4);
 }
 
+#[test]
+fn add_rejects_semicolon_entry() {
+    let dir = setup("add_semicolon");
+    pathctl("add_semicolon", dir.path())
+        .args(["add", r"C:\a;C:\b"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(';'));
+    // Nothing was added.
+    pathctl("add_semicolon", dir.path())
+        .args(["list", "--raw"])
+        .assert()
+        .success()
+        .stdout("");
+}
+
 // ---------------------------------------------------------------------------
 // add / remove / dedupe / move
 // ---------------------------------------------------------------------------
