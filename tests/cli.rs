@@ -68,6 +68,18 @@ fn test_key(name: &str) -> winreg::RegKey {
         .unwrap()
 }
 
+/// Open a scope subkey of a test key for direct registry access. The key must
+/// already exist (any mutation creates it).
+fn test_scope_key(name: &str, scope: &str) -> winreg::RegKey {
+    use winreg::enums::{KEY_READ, KEY_WRITE};
+    winreg::HKCU
+        .open_subkey_with_flags(
+            format!(r"Software\pathctl-test-{name}\{scope}"),
+            KEY_READ | KEY_WRITE,
+        )
+        .unwrap()
+}
+
 /// Write a raw registry value, bypassing the binary.
 fn write_raw(key: &winreg::RegKey, name: &str, bytes: &[u8], vtype: winreg::enums::RegType) {
     use winreg::RegValue;
@@ -139,6 +151,47 @@ fn check_flags_missing_directory_exit_1() {
 }
 
 #[test]
+fn check_warns_when_the_combined_path_is_long() {
+    let dir = setup("check_combined");
+    // Create both scope keys.
+    for scope in ["user", "system"] {
+        pathctl("check_combined", dir.path())
+            .args(["add", r"C:\pathctl-seed", "--scope", scope])
+            .assert()
+            .success();
+    }
+    // Each scope stays under the ~2,048 threshold; together they exceed it.
+    let value = (0..70)
+        .map(|i| format!(r"C:\pathctl-long-{i}"))
+        .collect::<Vec<_>>()
+        .join(";");
+    assert!(
+        value.chars().count() < 2048,
+        "each scope must stay under the threshold"
+    );
+    for scope in ["user", "system"] {
+        let key = test_scope_key("check_combined", scope);
+        write_raw(
+            &key,
+            "Path",
+            &wide_bytes(&value),
+            winreg::enums::REG_EXPAND_SZ,
+        );
+    }
+    // `--scope all` sees both and reports the combined PATH.
+    pathctl("check_combined", dir.path())
+        .args(["check", "--scope", "all"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("system+user PATH"));
+    // A single scope has nothing to combine.
+    pathctl("check_combined", dir.path())
+        .args(["check", "--scope", "user"])
+        .assert()
+        .stdout(predicate::str::contains("system+user").not());
+}
+
+#[test]
 fn bare_drive_letter_is_not_the_drive_root() {
     let dir = setup("bare_drive");
     pathctl("bare_drive", dir.path())
@@ -152,7 +205,10 @@ fn bare_drive_letter_is_not_the_drive_root() {
         .assert()
         .success();
     // Two distinct entries, so dedupe has nothing to remove.
-    pathctl("bare_drive", dir.path()).arg("dedupe").assert().code(4);
+    pathctl("bare_drive", dir.path())
+        .arg("dedupe")
+        .assert()
+        .code(4);
 }
 
 #[test]
@@ -523,7 +579,10 @@ fn prune_keeps_files_and_relative_entries() {
         .arg("check")
         .assert()
         .success();
-    pathctl("prune_files", dir.path()).arg("prune").assert().code(4);
+    pathctl("prune_files", dir.path())
+        .arg("prune")
+        .assert()
+        .code(4);
     let out = pathctl("prune_files", dir.path())
         .args(["list", "--raw"])
         .output()
@@ -999,7 +1058,10 @@ fn env_set_creates_an_empty_value_and_reports_it() {
         .success()
         .stdout(predicate::str::contains(r#""after":[""]"#));
     // The value exists and is empty, not absent.
-    assert_eq!(test_key("env_empty").get_value::<String, _>(name).unwrap(), "");
+    assert_eq!(
+        test_key("env_empty").get_value::<String, _>(name).unwrap(),
+        ""
+    );
     // Re-setting the same empty value is still a no-op.
     pathctl("env_empty", dir.path())
         .args(["env", "set", name, ""])

@@ -566,9 +566,15 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
     // Elevate the *whole* import up front rather than per item: a system write
     // reached halfway through used to relaunch for that one value, leaving the
     // user changes already applied. Decide once, before any write.
-    let needs_system = planned
-        .iter()
-        .any(|c| matches!(c, Planned::Path { scope: Scope::System, .. }));
+    let needs_system = planned.iter().any(|c| {
+        matches!(
+            c,
+            Planned::Path {
+                scope: Scope::System,
+                ..
+            }
+        )
+    });
     if needs_system && !reg.can_write(Scope::System) {
         if g.elevate {
             let code = crate::elevate::relaunch_elevated()
@@ -688,7 +694,11 @@ mod tests {
         )
         .unwrap();
         create.rollback(&reg).unwrap();
-        assert!(reg.read_var(Scope::User, "PATHCTL_ROLL_NEW").unwrap().is_none());
+        assert!(
+            reg.read_var(Scope::User, "PATHCTL_ROLL_NEW")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

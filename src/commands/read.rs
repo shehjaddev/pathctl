@@ -131,6 +131,11 @@ enum Finding {
         units: usize,
         limit: usize,
     },
+    /// The combined system+user PATH (what a new process inherits) exceeds what
+    /// an environment value may hold.
+    CombinedOverLimit { units: usize, limit: usize },
+    /// The combined system+user PATH is approaching the practical limit.
+    CombinedNearLimit { units: usize, limit: usize },
 }
 
 impl Finding {
@@ -159,6 +164,12 @@ impl Finding {
                 units,
                 limit: _,
             } => format!("[{scope}] PATH is {units} characters, near the practical limit"),
+            Finding::CombinedOverLimit { units: _, limit } => {
+                format!("the combined system+user PATH exceeds the {limit} character limit!")
+            }
+            Finding::CombinedNearLimit { units, limit: _ } => format!(
+                "the combined system+user PATH is {units} characters, near the practical limit"
+            ),
         }
     }
 }
@@ -208,7 +219,8 @@ pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
             }
         }
     }
-    // Near-limit warning for the combined value per scope.
+    // Near-limit warning for the combined value per scope. The 32,767 cap is a
+    // per-value one, so it is checked scope by scope.
     for (scope, value) in &values {
         let label = scope.label();
         if let Some(v) = value {
@@ -222,6 +234,33 @@ pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
             } else if units >= util::WARN_PATH_LEN {
                 findings.push(Finding::ValueNearLimit {
                     scope: label,
+                    units,
+                    limit: util::WARN_PATH_LEN,
+                });
+            }
+        }
+    }
+    // The ~2,048 practical limit applies to the PATH a new process inherits:
+    // system and user combined, not each scope alone. Only meaningful when both
+    // scopes were read (`--scope all`), and only warns when neither scope alone
+    // already did.
+    if scopes.contains(&Scope::System) && scopes.contains(&Scope::User) {
+        let raw = |wanted: Scope| {
+            values
+                .iter()
+                .find(|(s, _)| *s == wanted)
+                .and_then(|(_, v)| v.as_ref())
+                .map(|v| v.raw.as_str())
+        };
+        if let Some(combined) = registry::compose_path(raw(Scope::System), raw(Scope::User)) {
+            let units = util::utf16_len(&combined);
+            if units > util::MAX_ENV_VALUE {
+                findings.push(Finding::CombinedOverLimit {
+                    units,
+                    limit: util::MAX_ENV_VALUE,
+                });
+            } else if units >= util::WARN_PATH_LEN {
+                findings.push(Finding::CombinedNearLimit {
                     units,
                     limit: util::WARN_PATH_LEN,
                 });
@@ -303,6 +342,24 @@ mod tests {
             }
             .describe(),
             "[user] PATH is 3000 characters, near the practical limit"
+        );
+        // The combined finding has no scope: the limit applies to what a new
+        // process inherits, not to either scope alone.
+        assert_eq!(
+            Finding::CombinedNearLimit {
+                units: 3_000,
+                limit: util::WARN_PATH_LEN,
+            }
+            .describe(),
+            "the combined system+user PATH is 3000 characters, near the practical limit"
+        );
+        assert_eq!(
+            Finding::CombinedOverLimit {
+                units: 40_000,
+                limit: util::MAX_ENV_VALUE,
+            }
+            .describe(),
+            "the combined system+user PATH exceeds the 32767 character limit!"
         );
     }
 }

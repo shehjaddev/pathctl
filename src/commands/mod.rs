@@ -257,8 +257,23 @@ fn guard_length(name: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn warn_long_path(value: &str) {
-    let len = util::utf16_len(value);
+/// Warn when the PATH a new process would inherit -- this scope's new value
+/// plus the other scope -- is near the practical limit. The limit applies to
+/// the combined PATH, not to each scope on its own.
+fn warn_long_path(reg: &Registry, scope: Scope, value: &str) {
+    let other = match scope {
+        Scope::System => reg.read_path(Scope::User),
+        Scope::User => reg.read_path(Scope::System),
+    };
+    let other = other.ok().flatten().map(|v| v.raw);
+    let combined = match scope {
+        Scope::System => registry::compose_path(Some(value), other.as_deref()),
+        Scope::User => registry::compose_path(other.as_deref(), Some(value)),
+    };
+    let Some(combined) = combined else {
+        return;
+    };
+    let len = util::utf16_len(&combined);
     if len >= util::WARN_PATH_LEN {
         eprintln!(
             "warning: combined PATH is {len} characters (approaching the ~2,048 practical limit)"
@@ -400,8 +415,8 @@ fn journal(
         ty.map(registry::reg_type_to_u32),
     );
     snap.before_present = Some(before_present);
-    let path = snapshot::save(&snap)
-        .map_err(|e| AppError::Other(format!("snapshot failed: {e}")))?;
+    let path =
+        snapshot::save(&snap).map_err(|e| AppError::Other(format!("snapshot failed: {e}")))?;
     if let Err(e) = snapshot::prune() {
         eprintln!("warning: snapshot prune failed: {e}");
     }
@@ -486,7 +501,7 @@ fn commit(
         }
     }
     if name == registry::PATH_VALUE {
-        warn_long_path(after_raw);
+        warn_long_path(reg, scope, after_raw);
     }
     if !g.no_broadcast {
         notify::broadcast_environment();

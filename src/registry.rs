@@ -62,7 +62,7 @@ impl Environment {
 
 /// Join the two PATH scopes as a new process inherits them: system, then user,
 /// with the `;` separator only when both sides are non-empty.
-fn compose_path(system: Option<&str>, user: Option<&str>) -> Option<String> {
+pub fn compose_path(system: Option<&str>, user: Option<&str>) -> Option<String> {
     match (system.unwrap_or(""), user.unwrap_or("")) {
         ("", "") => {
             if system.is_some() || user.is_some() {
@@ -453,7 +453,8 @@ mod tests {
     fn environment_path_composes_with_one_side_only() {
         let key = TestKeyGuard::new("environment-one");
         let reg = key.registry();
-        reg.write_path(Scope::User, r"C:\only-user", REG_SZ).unwrap();
+        reg.write_path(Scope::User, r"C:\only-user", REG_SZ)
+            .unwrap();
         assert_eq!(
             reg.environment().unwrap().get("Path").as_deref(),
             Some(r"C:\only-user")

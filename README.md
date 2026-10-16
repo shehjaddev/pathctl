@@ -27,7 +27,7 @@ or build from source: `cargo build --release` (Rust 1.88+, Windows).
 | Command | Purpose | Example |
 |---|---|---|
 | `pathctl list` | numbered entries; `!` missing dir, `d` duplicate, `%` unresolvable variable, `e` expandable (`%VAR%`) entry | `pathctl list --scope all` |
-| `pathctl check` | analyze: dups, missing dirs, >260-char entries, near-limit (exit 1 if findings) | `pathctl check` |
+| `pathctl check` | analyze: dups, missing dirs, >260-char entries, per-scope and combined near-limit (exit 1 if findings) | `pathctl check` |
 | `pathctl add <dir>` | append (or `--prepend`) a directory; `--dedupe` = no-op if present | `pathctl add C:\tools --prepend` |
 | `pathctl remove <dir\|#index>` | remove by path or 1-based list index | `pathctl remove 3` |
 | `pathctl dedupe` | drop duplicates, keep first | `pathctl dedupe` |
@@ -69,7 +69,7 @@ that value does not exist.
 | Command | Shape |
 |---|---|
 | `list` | `[{"scope","entries":[{"index","entry","flags"}]}]`, one object per scope. `flags` holds any of `expanded`, `unresolvable`, `missing`, `dup` |
-| `check` | `{"ok":bool,"findings":[{"kind","scope",...}]}`. `kind` is one of `duplicate`, `unresolvable`, `missing` (each with `entry`), `entry_too_long` (with `entry` and `limit`), `value_over_limit`, `value_near_limit` (each with `units` and `limit`) |
+| `check` | `{"ok":bool,"findings":[{"kind","scope",...}]}`. `kind` is one of `duplicate`, `unresolvable`, `missing` (each with `entry`), `entry_too_long` (with `entry` and `limit`), `value_over_limit`, `value_near_limit` (each with `units` and `limit`), `combined_over_limit`, `combined_near_limit` (each with `units` and `limit`; emitted only under `--scope all`, on the combined system+user PATH) |
 | `diff` | `[{"scope","base","current","changes"}]`. With no recorded baseline the object also carries `"note"` and empty `changes` |
 | `undo --list` | the snapshots themselves: `[{"scope","name","before","after","command","ts","ty"}]` (`ts` is Unix nanoseconds, `ty` the registry type, omitted when unknown) |
 | `env get` | `{"scope","name","value","ty"}`; an unset variable exits `4` and prints nothing |

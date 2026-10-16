@@ -54,7 +54,9 @@ pub fn add(
         existed.then_some((before_raw.as_str(), &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("add {entry}"),
-    )?.delegated_code() {
+    )?
+    .delegated_code()
+    {
         return Ok(code);
     }
     report_mutation(
@@ -114,7 +116,9 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
         existed.then_some((before_raw.as_str(), &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("remove {removed}"),
-    )?.delegated_code() {
+    )?
+    .delegated_code()
+    {
         return Ok(code);
     }
     report_mutation(
@@ -155,7 +159,9 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         existed.then_some((before_raw.as_str(), &before_ty)),
         Some((&after_raw, &before_ty)),
         "dedupe",
-    )?.delegated_code() {
+    )?
+    .delegated_code()
+    {
         return Ok(code);
     }
     report_mutation(
@@ -207,7 +213,9 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         existed.then_some((before_raw.as_str(), &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("prune {}", removed.len()),
-    )?.delegated_code() {
+    )?
+    .delegated_code()
+    {
         return Ok(code);
     }
     let mut summary = String::new();
@@ -248,7 +256,9 @@ pub fn move_entry(reg: &Registry, g: &Global, scope: Scope, from: usize, to: usi
         existed.then_some((before_raw.as_str(), &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("move {from} {to}"),
-    )?.delegated_code() {
+    )?
+    .delegated_code()
+    {
         return Ok(code);
     }
     report_mutation(

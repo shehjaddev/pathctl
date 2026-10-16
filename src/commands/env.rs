@@ -109,8 +109,16 @@ pub fn env_delete(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Resul
     };
     confirm(g, &format!("delete {name}"))?;
     let before_pair = Some((current.raw.as_str(), &current.ty));
-    if let Some(code) =
-        commit(reg, g, scope, name, before_pair, None, &format!("delete {name}"))?.delegated_code()
+    if let Some(code) = commit(
+        reg,
+        g,
+        scope,
+        name,
+        before_pair,
+        None,
+        &format!("delete {name}"),
+    )?
+    .delegated_code()
     {
         return Ok(code);
     }

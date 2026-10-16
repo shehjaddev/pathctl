@@ -20,7 +20,11 @@ pub fn undo_list(
                 s.scope,
                 s.name,
                 s.command,
-                if s.before_exists() { &s.before } else { "(none)" },
+                if s.before_exists() {
+                    &s.before
+                } else {
+                    "(none)"
+                },
                 if s.after.is_empty() {
                     "(none)"
                 } else {
@@ -113,7 +117,7 @@ fn apply_restore(
     if name == registry::PATH_VALUE {
         let committed = write_path_elev(reg, g, *scope, raw, ty.clone())?;
         if committed == Committed::Written {
-            warn_long_path(raw);
+            warn_long_path(reg, *scope, raw);
         }
         return Ok(committed);
     }
