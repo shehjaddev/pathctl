@@ -25,10 +25,14 @@ pub fn add(
     let (before_raw, before_ty) = current_path(reg, scope)?;
     let mut entries = pathops::parse(&before_raw);
     let already_present = dedupe && pathops::contains(&entries, &entry);
-    if prepend {
-        entries.insert(0, entry.clone());
-    } else {
-        entries.push(entry.clone());
+    // With --dedupe an entry already present is left out, so the preview shows
+    // the unchanged list and the real run reports the existing no-op.
+    if !already_present {
+        if prepend {
+            entries.insert(0, entry.clone());
+        } else {
+            entries.push(entry.clone());
+        }
     }
     let after_raw = entries.join(";");
 

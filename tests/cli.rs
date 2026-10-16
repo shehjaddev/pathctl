@@ -226,6 +226,13 @@ fn add_dedupe_noop_exits_4() {
         .args(["add", entry, "--dedupe"])
         .assert()
         .code(4);
+    // A dry run of the same no-op previews the unchanged list (no `+ entry`)
+    // and exits 0, matching the real run's "nothing to do".
+    pathctl("add_dedupe_noop", dir.path())
+        .args(["add", entry, "--dedupe", "--dry-run"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains('+').not());
 }
 
 #[test]
