@@ -116,10 +116,14 @@ struct EntryAnalysis {
     expanded: bool,
 }
 
-fn analyze_entry(entry: &str) -> EntryAnalysis {
+fn analyze_entry(entry: &str, env: &registry::Environment) -> EntryAnalysis {
     let unquoted = pathops::trim_quotes(entry);
-    let target = util::expand(unquoted);
-    let unresolvable = util::has_var_ref(unquoted) && target == unquoted;
+    // Expand against the registry environment (what a new process inherits),
+    // not this process's block: an entry that only resolves from the caller's
+    // shell would otherwise look fine while being broken everywhere else.
+    let expanded = util::expand_from(unquoted, &|name| env.get(name));
+    let unresolvable = expanded.is_none();
+    let target = expanded.unwrap_or_else(|| unquoted.to_string());
     EntryAnalysis {
         unresolvable,
         missing: !unresolvable && is_missing(&target),

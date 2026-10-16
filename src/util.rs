@@ -19,101 +19,130 @@ pub fn utf16_len(s: &str) -> usize {
     s.encode_utf16().count()
 }
 
-/// Expand `%VAR%` references via ExpandEnvironmentStringsW. Returns the input
-/// unchanged if expansion fails (unresolvable or overlong result).
-pub fn expand(s: &str) -> String {
-    use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
-    // Most PATH entries hold no reference at all; there is nothing for Win32
-    // to substitute, so skip the call and its buffers entirely.
-    if !s.as_bytes().contains(&b'%') {
-        return s.to_string();
-    }
-    let wide: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
-    // Expand into a stack buffer first: entries are normally far shorter than
-    // this, and a 64 KiB heap buffer per entry showed up as allocation churn
-    // across `list`/`check` on a real PATH.
-    let mut buf = [0u16; 512];
-    let n = unsafe { ExpandEnvironmentStringsW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
-    // n is the size required including the NUL. n == 0 means expansion failed;
-    // n > buf.len() means the result did not fit, and slicing buf[..n-1] there
-    // would panic. An overlong result keeps the input, matching the documented
-    // "unresolvable or overlong result" behaviour and bounding the retry.
-    if n == 0 {
-        return s.to_string();
-    }
-    let need = n as usize;
-    if need > MAX_ENV_VALUE + 1 {
-        return s.to_string();
-    }
-    if need <= buf.len() {
-        return String::from_utf16_lossy(&buf[..need - 1]);
-    }
-    let mut retry = vec![0u16; need];
-    let n =
-        unsafe { ExpandEnvironmentStringsW(wide.as_ptr(), retry.as_mut_ptr(), retry.len() as u32) };
-    if n == 0 || (n as usize) > retry.len() {
-        return s.to_string();
-    }
-    String::from_utf16_lossy(&retry[..n as usize - 1])
+/// How deep a replacement may itself be expanded. Windows resolves a variable
+/// whose value holds another reference; the bound stops a self-referential
+/// value (`A=%A%`) from looping forever.
+const MAX_EXPAND_DEPTH: usize = 16;
+
+/// Expand every `%NAME%` reference in `s` by asking `lookup`. The name is
+/// passed without its `%`; `lookup` is case-insensitive and returns `None` for
+/// a name it does not know, which makes the whole expansion `None`
+/// (unresolvable) so callers keep the entry instead of pruning it.
+///
+/// Not-a-reference forms (`%%`, `%A\B%`, a lone `%`) are left literal. A
+/// replacement that itself holds a reference is expanded too, like the
+/// environment a new process inherits.
+pub fn expand_from(s: &str, lookup: &impl Fn(&str) -> Option<String>) -> Option<String> {
+    expand_rec(s, lookup, 0)
 }
 
-/// True if `p` contains a `%VAR%`-style reference (`%NAME%` with a
-/// non-empty name). A lone `%` (e.g. `C:\100%_coverage`) is not a reference,
-/// and neither is `%A\B%`: variable names never contain path separators or `;`.
-pub fn has_var_ref(p: &str) -> bool {
-    let mut rest = p;
-    while let Some(open) = rest.find('%') {
-        // Resume one character past this `%`, so a failed pair can still open
-        // one (as in `%%A%`).
-        rest = &rest[open + 1..];
-        let Some(close) = rest.find('%') else {
-            // No `%` left to close anything.
-            return false;
-        };
-        let name = &rest[..close];
-        if !name.is_empty() && !name.contains(['\\', '/', ';']) {
-            return true;
-        }
+fn expand_rec(s: &str, lookup: &impl Fn(&str) -> Option<String>, depth: usize) -> Option<String> {
+    if depth > MAX_EXPAND_DEPTH || !s.contains('%') {
+        return Some(s.to_string());
     }
-    false
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(open) = rest.find('%') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('%') else {
+            // No `%` left to close anything: the remainder is literal.
+            out.push('%');
+            out.push_str(after);
+            return Some(out);
+        };
+        let name = &after[..close];
+        if !is_reference_name(name) {
+            // Not a reference; keep the `%` and rescan from just after it so
+            // its closing `%` can open the next pair (as in `%%A%`).
+            out.push('%');
+            rest = after;
+            continue;
+        }
+        let value = lookup(name)?;
+        out.push_str(&expand_rec(&value, lookup, depth + 1)?);
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+/// True if `name` (the text between two `%`) is a variable reference. A lone
+/// `%` (e.g. `C:\100%_coverage`) is not a reference, and neither is `%A\B%`:
+/// variable names never contain path separators or `;`.
+fn is_reference_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains(['\\', '/', ';'])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn lookup(pairs: Vec<(&'static str, &'static str)>) -> impl Fn(&str) -> Option<String> {
+        move |name: &str| {
+            pairs
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
     #[test]
     fn expand_passthrough_without_vars() {
-        assert_eq!(expand(r"C:\tools"), r"C:\tools");
-        assert_eq!(expand(""), "");
+        let l = lookup(vec![]);
+        assert_eq!(expand_from(r"C:\tools", &l), Some(r"C:\tools".to_string()));
+        assert_eq!(expand_from("", &l), Some(String::new()));
     }
 
     #[test]
-    fn expand_resolves_real_var() {
-        // Unique name; process-scoped on Windows, no cleanup needed.
-        unsafe { std::env::set_var("PATHCTL_EXPAND_TEST", r"C:\resolved") };
-        assert_eq!(expand("%PATHCTL_EXPAND_TEST%"), r"C:\resolved");
+    fn expand_resolves_known_var() {
+        let l = lookup(vec![("PATHCTL_EXPAND_TEST", r"C:\resolved")]);
+        assert_eq!(
+            expand_from("%PATHCTL_EXPAND_TEST%", &l),
+            Some(r"C:\resolved".to_string())
+        );
+        assert_eq!(
+            expand_from(r"%PATHCTL_EXPAND_TEST%\tail", &l),
+            Some(r"C:\resolved\tail".to_string())
+        );
     }
 
     #[test]
-    fn expand_retries_with_a_larger_buffer() {
-        let big = "x".repeat(2_000);
-        unsafe { std::env::set_var("PATHCTL_EXPAND_BIG", &big) };
-        assert_eq!(expand("%PATHCTL_EXPAND_BIG%"), big);
-        assert_eq!(expand(r"%PATHCTL_EXPAND_BIG%\tail"), format!("{big}\\tail"));
+    fn expand_is_case_insensitive() {
+        let l = lookup(vec![("path", r"C:\bin")]);
+        assert_eq!(expand_from("%PATH%", &l), Some(r"C:\bin".to_string()));
     }
 
     #[test]
-    fn has_var_ref_needs_a_pair() {
-        assert!(has_var_ref(r"%SystemRoot%\x"));
-        assert!(has_var_ref(r"%ProgramFiles(x86)%\x"));
-        assert!(!has_var_ref(r"C:\100%_coverage"));
-        assert!(!has_var_ref(r"C:\tools"));
-        assert!(!has_var_ref(r"C:\a%b\c"));
-        assert!(!has_var_ref("%%"));
-        // A separator inside the name means it is not a variable reference,
-        // and a failed pair can still open one.
-        assert!(!has_var_ref(r"%A\B%"));
-        assert!(has_var_ref("%%A%"));
+    fn expand_unknown_var_is_none() {
+        let l = lookup(vec![("Known", "v")]);
+        assert_eq!(expand_from("%Missing%", &l), None);
+        assert_eq!(expand_from(r"%Known%\%Missing%", &l), None);
+    }
+
+    #[test]
+    fn expand_does_not_recurse_forever() {
+        let l = lookup(vec![("A", "%A%")]);
+        assert!(expand_from("%A%", &l).is_some());
+    }
+
+    #[test]
+    fn expand_leaves_non_references_literal() {
+        let l = lookup(vec![]);
+        assert_eq!(
+            expand_from(r"C:\100%_coverage", &l),
+            Some(r"C:\100%_coverage".to_string())
+        );
+        assert_eq!(expand_from("%A\\B%", &l), Some("%A\\B%".to_string()));
+        assert_eq!(expand_from("%%", &l), Some("%%".to_string()));
+        assert_eq!(expand_from("%%A%", &l), None);
+    }
+
+    #[test]
+    fn reference_names_exclude_separators() {
+        assert!(is_reference_name("SystemRoot"));
+        assert!(!is_reference_name(""));
+        assert!(!is_reference_name("A\\B"));
+        assert!(!is_reference_name("a;b"));
     }
 }

@@ -9,6 +9,7 @@
 //! flattens expandable values to `REG_SZ` (dotnet/runtime#89695, unfixed by
 //! design). Never goes through `setx` (1024-char crop, documented data loss).
 
+use std::collections::HashMap;
 use std::io;
 use winreg::enums::{KEY_READ, KEY_SET_VALUE, KEY_WRITE, REG_EXPAND_SZ, REG_SZ};
 use winreg::{HKCU, HKLM, RegKey, RegValue};
@@ -41,6 +42,39 @@ impl Scope {
 pub struct PathValue {
     pub raw: String,
     pub ty: RegType,
+}
+
+/// The environment a new process would inherit, read from the registry rather
+/// than this process's block: system values overlaid by user values, with the
+/// two PATH scopes composed the way Windows builds the inherited PATH. Lookups
+/// are case-insensitive.
+pub struct Environment {
+    vars: HashMap<String, String>,
+}
+
+impl Environment {
+    /// The value of `name`, matched case-insensitively; `None` if no registry
+    /// environment value defines it.
+    pub fn get(&self, name: &str) -> Option<String> {
+        self.vars.get(&name.to_lowercase()).cloned()
+    }
+}
+
+/// Join the two PATH scopes as a new process inherits them: system, then user,
+/// with the `;` separator only when both sides are non-empty.
+fn compose_path(system: Option<&str>, user: Option<&str>) -> Option<String> {
+    match (system.unwrap_or(""), user.unwrap_or("")) {
+        ("", "") => {
+            if system.is_some() || user.is_some() {
+                Some(String::new())
+            } else {
+                None
+            }
+        }
+        (sys, "") => Some(sys.to_string()),
+        ("", usr) => Some(usr.to_string()),
+        (sys, usr) => Some(format!("{sys};{usr}")),
+    }
 }
 
 /// Registry access. `test_suffix` redirects all scopes under
@@ -190,6 +224,35 @@ impl Registry {
             ));
         }
         Ok(out)
+    }
+
+    /// The environment `list`, `check` and `prune` expand against: every text
+    /// value under both scopes, system first so a user value wins, plus the
+    /// composed PATH. Non-string values cannot hold a variable reference and
+    /// are skipped.
+    pub fn environment(&self) -> io::Result<Environment> {
+        let mut vars: HashMap<String, String> = HashMap::new();
+        let mut system_path = None;
+        let mut user_path = None;
+        for scope in [Scope::System, Scope::User] {
+            for (name, v) in self.enum_all(scope)? {
+                if !is_text_type(&v.ty) {
+                    continue;
+                }
+                if name.eq_ignore_ascii_case(PATH_VALUE) {
+                    match scope {
+                        Scope::System => system_path = Some(v.raw),
+                        Scope::User => user_path = Some(v.raw),
+                    }
+                    continue;
+                }
+                vars.insert(name.to_lowercase(), v.raw);
+            }
+        }
+        if let Some(path) = compose_path(system_path.as_deref(), user_path.as_deref()) {
+            vars.insert(PATH_VALUE.to_lowercase(), path);
+        }
+        Ok(Environment { vars })
     }
 }
 
@@ -343,5 +406,40 @@ mod tests {
     fn encode_decode_roundtrip() {
         assert_eq!(decode(&encode(r"C:\tools")), r"C:\tools");
         assert_eq!(decode(&encode("")), "");
+    }
+
+    #[test]
+    fn environment_overlays_user_over_system_and_composes_path() {
+        let key = TestKeyGuard::new("environment");
+        let reg = key.registry();
+        assert!(reg.environment().unwrap().get("Anything").is_none());
+        reg.write_var(Scope::System, "PATHCTL_ENV_OVER", "sys", REG_SZ)
+            .unwrap();
+        reg.write_var(Scope::User, "PATHCTL_ENV_OVER", "usr", REG_SZ)
+            .unwrap();
+        reg.write_var(Scope::System, "PATHCTL_ENV_SYS", "s", REG_SZ)
+            .unwrap();
+        reg.write_path(Scope::System, r"C:\sys", REG_EXPAND_SZ)
+            .unwrap();
+        reg.write_path(Scope::User, r"C:\usr", REG_EXPAND_SZ)
+            .unwrap();
+        let env = reg.environment().unwrap();
+        // A user value overrides the system one; lookups are case-insensitive.
+        assert_eq!(env.get("PATHCTL_ENV_OVER").as_deref(), Some("usr"));
+        assert_eq!(env.get("pathctl_env_over").as_deref(), Some("usr"));
+        assert_eq!(env.get("PATHCTL_ENV_SYS").as_deref(), Some("s"));
+        // PATH is composed system-then-user as a new process inherits it.
+        assert_eq!(env.get("Path").as_deref(), Some(r"C:\sys;C:\usr"));
+    }
+
+    #[test]
+    fn environment_path_composes_with_one_side_only() {
+        let key = TestKeyGuard::new("environment-one");
+        let reg = key.registry();
+        reg.write_path(Scope::User, r"C:\only-user", REG_SZ).unwrap();
+        assert_eq!(
+            reg.environment().unwrap().get("Path").as_deref(),
+            Some(r"C:\only-user")
+        );
     }
 }

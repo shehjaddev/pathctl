@@ -42,6 +42,7 @@ struct ScopeOut {
 }
 
 pub fn list(reg: &Registry, g: &Global, scopes: &[Scope], raw: bool) -> Result<u8> {
+    let env = reg.environment()?;
     let mut out = Vec::new();
     for scope in scopes {
         let entries = match reg.read_path(*scope)? {
@@ -54,7 +55,7 @@ pub fn list(reg: &Registry, g: &Global, scopes: &[Scope], raw: bool) -> Result<u
             // Analysis always runs on the expanded form: in `--raw` mode only
             // the `expanded` flag is suppressed, so a resolvable `%VAR%` entry
             // is not misreported as missing.
-            let analysis = analyze_entry(entry);
+            let analysis = analyze_entry(entry, &env);
             let mut flags = Vec::new();
             if !raw && analysis.expanded {
                 flags.push(EntryFlag::Expanded);
@@ -164,6 +165,7 @@ impl Finding {
 
 pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
     let mut findings: Vec<Finding> = Vec::new();
+    let env = reg.environment()?;
     // Read each scope once: the entries pass and the combined-length pass below
     // both need the raw value.
     let mut values: Vec<(Scope, Option<PathValue>)> = Vec::with_capacity(scopes.len());
@@ -184,7 +186,7 @@ pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
                     entry: entry.clone(),
                 });
             }
-            let analysis = analyze_entry(entry);
+            let analysis = analyze_entry(entry, &env);
             if analysis.unresolvable {
                 findings.push(Finding::Unresolvable {
                     scope: label,

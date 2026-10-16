@@ -1614,7 +1614,12 @@ fn list_raw_validates_resolved_entries() {
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    unsafe { std::env::set_var("PATHCTL_LIST_RAW_DIR", &existing) };
+    // Expansion reads the registry environment (user scope of the test key),
+    // not this process's block, so a registry variable resolves.
+    pathctl("list_raw_vars", dir.path())
+        .args(["env", "set", "PATHCTL_LIST_RAW_DIR", &existing])
+        .assert()
+        .success();
     pathctl("list_raw_vars", dir.path())
         .args(["add", "%PATHCTL_LIST_RAW_DIR%"])
         .assert()
@@ -1626,12 +1631,21 @@ fn list_raw_validates_resolved_entries() {
         .success()
         .stdout(predicate::str::contains("%PATHCTL_LIST_RAW_DIR%"))
         .stdout(predicate::str::contains('[').not());
+    // A name that exists only in the child process's inherited block must not
+    // resolve: the registry is the source of truth.
     pathctl("list_raw_vars", dir.path())
+        .env("PATHCTL_PROCESS_ONLY_DIR", &existing)
+        .args(["add", "%PATHCTL_PROCESS_ONLY_DIR%"])
+        .assert()
+        .success();
+    pathctl("list_raw_vars", dir.path())
+        .env("PATHCTL_PROCESS_ONLY_DIR", &existing)
         .args(["add", "%PATHCTL_DEFINITELY_UNRESOLVABLE_XYZ%"])
         .assert()
         .success();
     // Unresolvable, so existence is unknown: exactly one flag, never missing too.
     pathctl("list_raw_vars", dir.path())
+        .env("PATHCTL_PROCESS_ONLY_DIR", &existing)
         .args(["list", "--raw"])
         .assert()
         .success()

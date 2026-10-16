@@ -181,10 +181,11 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
 pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
     let (before_raw, before_ty) = current_path(reg, scope)?;
     let before = pathops::parse(&before_raw);
+    let env = reg.environment()?;
     let mut kept: Vec<String> = Vec::with_capacity(before.len());
     let mut removed: Vec<String> = Vec::new();
     for e in &before {
-        let analysis = analyze_entry(e);
+        let analysis = analyze_entry(e, &env);
         if !analysis.unresolvable && analysis.missing {
             removed.push(e.clone());
         } else {
