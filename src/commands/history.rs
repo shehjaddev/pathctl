@@ -86,8 +86,18 @@ fn restore_of(target: &Snapshot) -> Result<Restore> {
     })
 }
 
-/// Put a snapshot's value back, or remove it when it did not exist then.
-fn apply_restore(reg: &Registry, g: &Global, restore: &Restore) -> Result<Committed> {
+/// Put a snapshot's value back, or remove it when it did not exist then. The
+/// current value is guarded first: restoring text over a non-string value would
+/// destroy it, so refuse instead.
+fn apply_restore(
+    reg: &Registry,
+    g: &Global,
+    restore: &Restore,
+    current: Option<&PathValue>,
+) -> Result<Committed> {
+    if let Some(v) = current {
+        guard_text_type(&restore.name, &v.ty)?;
+    }
     let Restore {
         scope,
         name,
@@ -143,17 +153,9 @@ pub fn undo(
     confirm(g, &format!("undo '{}' ({})", target.command, target.ts))?;
     guard_length(&restore.name, &restore.raw)?;
 
-    if let Some(code) = apply_restore(reg, g, &restore)?.delegated_code() {
-        eprintln!("relaunched elevated; verify with list/env get (parent did not write)");
-        return Ok(code);
-    }
-
-    // Snapshot the inverse AFTER the write succeeds so a failed restore
-    // (e.g. system scope without admin) cannot poison the journal: the next
-    // undo would otherwise target a snapshot whose restore is a no-op. The
-    // pre-undo state stays recoverable from the undone snapshot's `before`,
-    // so crash-safety is unchanged.
-    journal(
+    // Journal the inverse *before* the write: a crash mid-restore leaves an
+    // undoable record, and a failed write can drop the premature snapshot.
+    let snap_path = journal(
         restore.scope,
         &restore.name,
         &before_raw,
@@ -161,6 +163,21 @@ pub fn undo(
         &format!("undo of {}", target.ts),
         current.as_ref().map(|v| v.ty.clone()),
     )?;
+    match apply_restore(reg, g, &restore, current.as_ref()) {
+        Ok(Committed::Written) => {}
+        Ok(Committed::Delegated(code)) => {
+            // The elevated child journals itself; drop ours and forward its code.
+            let _ = std::fs::remove_file(&snap_path);
+            eprintln!("relaunched elevated; verify with list/env get (parent did not write)");
+            return Ok(code);
+        }
+        Err(e) => {
+            // Nothing was restored, so the snapshot claims a state that never
+            // happened: drop it or the next undo replays a no-op.
+            let _ = std::fs::remove_file(&snap_path);
+            return Err(e);
+        }
+    }
     if !g.no_broadcast {
         notify::broadcast_environment();
     }

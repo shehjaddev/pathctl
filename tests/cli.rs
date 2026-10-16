@@ -644,6 +644,31 @@ fn undo_restores_an_absent_path_as_absent() {
 }
 
 #[test]
+fn undo_refuses_to_overwrite_a_non_string_value() {
+    let dir = setup("undo_binary");
+    pathctl("undo_binary", dir.path())
+        .args(["env", "set", "PATHCTL_UNDO_BIN", "text"])
+        .assert()
+        .success();
+    // Replace the value with a binary one behind pathctl's back.
+    let key = test_key("undo_binary");
+    write_raw(
+        &key,
+        "PATHCTL_UNDO_BIN",
+        &[0x01, 0x00, 0x02],
+        winreg::enums::REG_BINARY,
+    );
+    // Restoring the text snapshot over it would destroy the binary value.
+    pathctl("undo_binary", dir.path())
+        .arg("undo")
+        .assert()
+        .code(6)
+        .stderr(predicate::str::contains("REG_BINARY"));
+    let raw = key.get_raw_value("PATHCTL_UNDO_BIN").unwrap();
+    assert_eq!(raw.vtype, winreg::enums::REG_BINARY);
+}
+
+#[test]
 fn undo_to_specific_snapshot() {
     let dir = setup("undo_to");
     let a = r"C:\pathctl-uto-a";
