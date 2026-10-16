@@ -240,10 +240,9 @@ pub fn check(reg: &Registry, g: &Global, scopes: &[Scope]) -> Result<u8> {
             }
         }
     }
-    // The ~2,048 practical limit applies to the PATH a new process inherits:
-    // system and user combined, not each scope alone. Only meaningful when both
-    // scopes were read (`--scope all`), and only warns when neither scope alone
-    // already did.
+    // The ~2,048 practical limit also applies to the PATH a new process
+    // inherits: system and user combined. Reported in addition to a per-scope
+    // warning when both scopes were read (`--scope all`).
     if scopes.contains(&Scope::System) && scopes.contains(&Scope::User) {
         let raw = |wanted: Scope| {
             values

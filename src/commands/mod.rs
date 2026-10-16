@@ -382,6 +382,33 @@ pub enum Committed {
     Delegated(u8),
 }
 
+/// Result of `commit`, including the snapshot path when this process wrote.
+/// The path lets a caller that undoes the write also drop the journal entry.
+pub(super) struct CommitOutcome {
+    pub committed: Committed,
+    pub snapshot: Option<std::path::PathBuf>,
+}
+
+impl CommitOutcome {
+    fn written(snapshot: std::path::PathBuf) -> Self {
+        Self {
+            committed: Committed::Written,
+            snapshot: Some(snapshot),
+        }
+    }
+
+    fn delegated(code: u8) -> Self {
+        Self {
+            committed: Committed::Delegated(code),
+            snapshot: None,
+        }
+    }
+
+    pub(super) fn delegated_code(self) -> Option<u8> {
+        self.committed.delegated_code()
+    }
+}
+
 impl Committed {
     /// The exit code to return when this process delegated the write; `None`
     /// when it wrote the value itself.
@@ -438,7 +465,7 @@ fn commit(
     before: Option<(&str, &RegType)>,
     after: Option<(&str, &RegType)>,
     command: &str,
-) -> Result<Committed> {
+) -> Result<CommitOutcome> {
     let before_raw = before.map(|(v, _)| v).unwrap_or_default();
     let after_raw = after.map(|(v, _)| v).unwrap_or_default();
     let before_ty = before.map(|(_, t)| t);
@@ -490,7 +517,7 @@ fn commit(
                 "env get"
             };
             eprintln!("relaunched elevated; verify with {verify} (parent did not write)");
-            return Ok(Committed::Delegated(code));
+            return Ok(CommitOutcome::delegated(code));
         }
         Err(e) => {
             // The write failed (exit 3 without admin, or a registry error), so
@@ -506,7 +533,7 @@ fn commit(
     if !g.no_broadcast {
         notify::broadcast_environment();
     }
-    Ok(Committed::Written)
+    Ok(CommitOutcome::written(snap_path))
 }
 
 /// Which snapshots an `undo --kind` filter selects. The variant names are the

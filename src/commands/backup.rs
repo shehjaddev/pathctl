@@ -398,7 +398,7 @@ impl Planned {
     }
 
     /// Apply the change; `Delegated` means an elevated child took over.
-    fn apply(&self, reg: &Registry, g: &Global) -> Result<Committed> {
+    fn apply(&self, reg: &Registry, g: &Global) -> Result<CommitOutcome> {
         match self {
             Planned::Path {
                 scope,
@@ -588,22 +588,32 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
 
     // Apply, remembering what succeeded so a later failure can be rolled back
     // instead of leaving a half-imported environment behind.
-    let mut applied: Vec<&Planned> = Vec::new();
+    let mut applied: Vec<Applied<'_>> = Vec::new();
     for change in &planned {
         match change.apply(reg, g) {
-            Ok(Committed::Written) => {
-                applied.push(change);
-                if g.json {
-                    docs.push(change.doc());
+            Ok(outcome) => match outcome.committed {
+                Committed::Written => {
+                    let Some(snapshot) = outcome.snapshot else {
+                        return Err(AppError::Other(
+                            "import write left no snapshot to roll back".into(),
+                        ));
+                    };
+                    if g.json {
+                        docs.push(change.doc());
+                    }
+                    applied.push(Applied { change, snapshot });
                 }
-            }
-            // Elevation is settled above; a delegation here means a per-item
-            // fallback fired anyway. Roll back and forward its code rather than
-            // claim success for work this process did not do.
-            Ok(Committed::Delegated(code)) => {
-                roll_back(reg, &applied);
-                return Ok(code);
-            }
+                // A child that exits 0 has applied the rest of this same import.
+                // The values this process already wrote are part of that result.
+                // Rolling them back now would undo the child.
+                Committed::Delegated(0) => return Ok(0),
+                // The child failed. Undo only what this process wrote. The child
+                // rolls back its own writes before it exits.
+                Committed::Delegated(code) => {
+                    roll_back(reg, &applied);
+                    return Ok(code);
+                }
+            },
             Err(e) => {
                 roll_back(reg, &applied);
                 return Err(e);
@@ -627,12 +637,26 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
     Ok(0)
 }
 
+/// One import change this process already wrote, plus the snapshot `commit`
+/// created for it. A rollback has to delete that snapshot: leaving it would
+/// let a later `undo` reapply the import that just failed.
+struct Applied<'a> {
+    change: &'a Planned,
+    snapshot: std::path::PathBuf,
+}
+
 /// Undo the changes an import already applied, newest first. Failures are
 /// reported but do not mask the original error: the caller is already failing.
-fn roll_back(reg: &Registry, applied: &[&Planned]) {
-    for change in applied.iter().rev() {
-        if let Err(e) = change.rollback(reg) {
+/// The snapshot is removed only after the registry value is restored. If the
+/// restore fails, the snapshot remains so `undo` can still put the value back.
+fn roll_back(reg: &Registry, applied: &[Applied<'_>]) {
+    for item in applied.iter().rev() {
+        if let Err(e) = item.change.rollback(reg) {
             eprintln!("warning: import rollback failed: {e}");
+            continue;
+        }
+        if let Err(e) = std::fs::remove_file(&item.snapshot) {
+            eprintln!("warning: could not drop rolled-back snapshot: {e}");
         }
     }
 }
@@ -698,6 +722,60 @@ mod tests {
             reg.read_var(Scope::User, "PATHCTL_ROLL_NEW")
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn rollback_drops_the_snapshot_of_a_reverted_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("PATHCTL_SNAPSHOT_DIR");
+        unsafe { std::env::set_var("PATHCTL_SNAPSHOT_DIR", dir.path()) };
+        struct Restore(Option<std::ffi::OsString>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                unsafe {
+                    match self.0.take() {
+                        Some(value) => std::env::set_var("PATHCTL_SNAPSHOT_DIR", value),
+                        None => std::env::remove_var("PATHCTL_SNAPSHOT_DIR"),
+                    }
+                }
+            }
+        }
+        let _restore = Restore(previous);
+
+        let key = registry::TestKeyGuard::new("import-rollback-snap");
+        let reg = key.registry();
+        let g = Global {
+            json: false,
+            dry_run: false,
+            yes: true,
+            no_broadcast: true,
+            elevate: false,
+        };
+        let planned = Planned::Var {
+            name: "PATHCTL_ROLL_SNAP".into(),
+            before: None,
+            after: "x".into(),
+            ty: registry::default_var_type(),
+        };
+        let outcome = planned.apply(&reg, &g).unwrap();
+        let snapshot = outcome.snapshot.expect("import write journals a snapshot");
+        assert!(snapshot.exists());
+        roll_back(
+            &reg,
+            &[Applied {
+                change: &planned,
+                snapshot,
+            }],
+        );
+        assert!(
+            reg.read_var(Scope::User, "PATHCTL_ROLL_SNAP")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            std::fs::read_dir(dir.path()).unwrap().next().is_none(),
+            "rolled-back import must not leave an undo record"
         );
     }
 
