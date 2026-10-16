@@ -263,12 +263,13 @@ pub fn reg_type_to_u32(t: RegType) -> u32 {
     t as isize as u32
 }
 
-/// Reconstruct a `RegType` from its u32 form; unknown values fall back to
-/// `REG_SZ` (defensive: future Windows value types we don't know). The
-/// numeric values are the stable Win32 registry value-type constants.
-pub fn reg_type_from_u32(v: u32) -> RegType {
+/// Reconstruct a `RegType` from its u32 form; `None` for a code this build
+/// does not recognize. Never silently map an unknown type to `REG_SZ`: a
+/// caller that guesses would store a value Windows reads back as a string.
+/// The numeric values are the stable Win32 registry value-type constants.
+pub fn reg_type_from_u32(v: u32) -> Option<RegType> {
     use winreg::enums::RegType;
-    match v as isize {
+    Some(match v as isize {
         0 => RegType::REG_NONE,
         1 => RegType::REG_SZ,
         2 => RegType::REG_EXPAND_SZ,
@@ -281,8 +282,8 @@ pub fn reg_type_from_u32(v: u32) -> RegType {
         9 => RegType::REG_FULL_RESOURCE_DESCRIPTOR,
         10 => RegType::REG_RESOURCE_REQUIREMENTS_LIST,
         11 => RegType::REG_QWORD,
-        _ => RegType::REG_SZ,
-    }
+        _ => return None,
+    })
 }
 
 /// REG_* values are NUL-terminated UTF-16LE.

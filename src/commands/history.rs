@@ -70,7 +70,7 @@ fn restore_of(target: &Snapshot) -> Result<Restore> {
     };
     let ty = target
         .ty
-        .map(registry::reg_type_from_u32)
+        .and_then(registry::reg_type_from_u32)
         .unwrap_or_else(|| {
             if target.name == registry::PATH_VALUE {
                 registry::default_path_type()

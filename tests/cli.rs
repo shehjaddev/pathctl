@@ -1180,6 +1180,34 @@ fn export_import_roundtrip() {
 }
 
 #[test]
+fn import_refuses_unknown_registry_type_with_nothing_written() {
+    let dir = setup("import_unknown_ty");
+    let f = dir.path().join("unknown.json");
+    let doc = serde_json::json!({
+        "tool": "pathctl",
+        "version": 1,
+        "path": {},
+        "variables": { "user": [
+            { "name": "PATHCTL_GOOD_BEFORE", "value": "ok", "ty": 1 },
+            { "name": "PATHCTL_BAD_TY", "value": "x", "ty": 99 }
+        ]},
+    });
+    std::fs::write(&f, serde_json::to_string(&doc).unwrap()).unwrap();
+    // An unrecognized type code must be refused, not silently stored as REG_SZ.
+    pathctl("import_unknown_ty", dir.path())
+        .arg("import")
+        .arg(&f)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("unknown registry type"));
+    // The valid entry ahead of the bad one is not written either.
+    pathctl("import_unknown_ty", dir.path())
+        .args(["env", "get", "PATHCTL_GOOD_BEFORE"])
+        .assert()
+        .code(4);
+}
+
+#[test]
 fn import_refuses_files_from_another_tool_or_newer_format() {
     let dir = setup("import_origin");
     let vars = serde_json::json!({

@@ -198,10 +198,15 @@ fn path_import_state(
 ) -> Result<(String, RegType, RegType)> {
     let (before_raw, before_ty) = current_path(reg, scope)?;
     guard_text_type(registry::PATH_VALUE, &before_ty)?;
-    let write_ty = value
-        .ty
-        .map(registry::reg_type_from_u32)
-        .unwrap_or_else(|| before_ty.clone());
+    let write_ty = match value.ty {
+        Some(code) => registry::reg_type_from_u32(code).ok_or_else(|| {
+            AppError::Usage(format!(
+                "refusing to import the {} PATH: unknown registry type {code}",
+                scope.label()
+            ))
+        })?,
+        None => before_ty.clone(),
+    };
     if !registry::is_text_type(&write_ty) {
         return Err(AppError::Usage(format!(
             "refusing to import the {} PATH: {} is not a string type",
@@ -252,14 +257,15 @@ fn var_import_changes(current: Option<&PathValue>, var: &BackupVar) -> bool {
         None => false,
         Some(v) => var
             .ty
-            .is_some_and(|t| registry::reg_type_from_u32(t) != v.ty),
+            .and_then(registry::reg_type_from_u32)
+            .is_some_and(|t| t != v.ty),
     }
 }
 
 /// Target type for an imported variable (file type, else keep, else default).
 fn var_import_ty(current: Option<&PathValue>, var: &BackupVar) -> RegType {
     var.ty
-        .map(registry::reg_type_from_u32)
+        .and_then(registry::reg_type_from_u32)
         .or_else(|| current.map(|v| v.ty.clone()))
         .unwrap_or_else(registry::default_var_type)
 }
@@ -279,7 +285,12 @@ fn var_import_state(reg: &Registry, var: &BackupVar) -> Result<Option<BackupVarS
         return Ok(None);
     }
     if let Some(t) = var.ty {
-        let declared = registry::reg_type_from_u32(t);
+        let declared = registry::reg_type_from_u32(t).ok_or_else(|| {
+            AppError::Usage(format!(
+                "refusing to import {}: unknown registry type {t}",
+                var.name
+            ))
+        })?;
         if !registry::is_text_type(&declared) {
             return Err(AppError::Usage(format!(
                 "refusing to import {}: {} is not a string type",
