@@ -990,6 +990,30 @@ fn env_get_unset_is_silent_exit_4() {
 }
 
 #[test]
+fn env_set_creates_an_empty_value_and_reports_it() {
+    let dir = setup("env_empty");
+    let name = "PATHCTL_EMPTY_VAR";
+    pathctl("env_empty", dir.path())
+        .args(["env", "set", name, "", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""after":[""]"#));
+    // The value exists and is empty, not absent.
+    assert_eq!(test_key("env_empty").get_value::<String, _>(name).unwrap(), "");
+    // Re-setting the same empty value is still a no-op.
+    pathctl("env_empty", dir.path())
+        .args(["env", "set", name, ""])
+        .assert()
+        .code(4);
+    // get prints an empty line, not exit 4.
+    pathctl("env_empty", dir.path())
+        .args(["env", "get", name])
+        .assert()
+        .success()
+        .stdout("\n");
+}
+
+#[test]
 fn env_set_is_undoable() {
     let dir = setup("env_undo");
     let name = "PATHCTL_TEST_VAR2";

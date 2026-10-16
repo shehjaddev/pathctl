@@ -20,11 +20,7 @@ pub fn undo_list(
                 s.scope,
                 s.name,
                 s.command,
-                if s.before.is_empty() {
-                    "(none)"
-                } else {
-                    &s.before
-                },
+                if s.before_exists() { &s.before } else { "(none)" },
                 if s.after.is_empty() {
                     "(none)"
                 } else {
@@ -53,9 +49,12 @@ fn undo_target(snaps: &[Snapshot], to: Option<usize>) -> Result<Option<&Snapshot
 struct Restore {
     scope: Scope,
     name: String,
-    /// The value to write back; empty means it did not exist then.
+    /// The value to write back; see `exists` for whether it existed.
     raw: String,
     ty: RegType,
+    /// Whether the value existed before the snapshotted mutation: a present
+    /// empty value restores that empty value, an absent one restores absence.
+    exists: bool,
 }
 
 fn restore_of(target: &Snapshot) -> Result<Restore> {
@@ -83,6 +82,7 @@ fn restore_of(target: &Snapshot) -> Result<Restore> {
         name: target.name.clone(),
         raw: target.before.clone(),
         ty,
+        exists: target.before_exists(),
     })
 }
 
@@ -103,25 +103,21 @@ fn apply_restore(
         name,
         raw,
         ty,
+        exists,
     } = restore;
+    if !exists {
+        // The snapshot recorded that the value did not exist, so restore
+        // absence rather than writing an empty value.
+        return delete_var_elev(reg, g, *scope, name);
+    }
     if name == registry::PATH_VALUE {
-        if raw.is_empty() {
-            // The snapshot recorded that the value did not exist, so restore
-            // absence rather than leaving an empty value behind (the variable
-            // branch below does the same).
-            return delete_var_elev(reg, g, *scope, name);
-        }
         let committed = write_path_elev(reg, g, *scope, raw, ty.clone())?;
         if committed == Committed::Written {
             warn_long_path(raw);
         }
         return Ok(committed);
     }
-    if raw.is_empty() {
-        delete_var_elev(reg, g, *scope, name)
-    } else {
-        write_var_elev(reg, g, *scope, name, raw, ty.clone())
-    }
+    write_var_elev(reg, g, *scope, name, raw, ty.clone())
 }
 
 pub fn undo(
@@ -140,13 +136,14 @@ pub fn undo(
     let target = target.ok_or_else(|| AppError::NoOp("nothing to undo".into()))?;
     let restore = restore_of(target)?;
     let current = reg.read_var(restore.scope, &restore.name)?;
-    let before_raw = current.as_ref().map(|v| v.raw.clone()).unwrap_or_default();
+    let before = current.as_ref().map(|v| v.raw.as_str());
+    let after = restore.exists.then_some(restore.raw.as_str());
 
     if g.dry_run {
         print_changes(
             g.json,
-            &entries_of(&restore.name, &before_raw),
-            &entries_of(&restore.name, &restore.raw),
+            &entries_of(&restore.name, before),
+            &entries_of(&restore.name, after),
         );
         return Ok(0);
     }
@@ -158,8 +155,9 @@ pub fn undo(
     let snap_path = journal(
         restore.scope,
         &restore.name,
-        &before_raw,
-        &restore.raw,
+        before,
+        after,
+        current.is_some(),
         &format!("undo of {}", target.ts),
         current.as_ref().map(|v| v.ty.clone()),
     )?;
@@ -186,8 +184,8 @@ pub fn undo(
         restore.scope,
         &restore.name,
         "undo",
-        &before_raw,
-        &restore.raw,
+        before,
+        after,
         &format!("restored {} ({})", restore.name, target.command),
     );
     Ok(0)

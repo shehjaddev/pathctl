@@ -26,6 +26,11 @@ pub struct Snapshot {
     /// restore `REG_EXPAND_SZ` faithfully.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ty: Option<u32>,
+    /// Whether the value existed before the mutation. Old journals omit it,
+    /// where an empty `before` meant absent; new snapshots record it so an
+    /// empty *present* value is distinguishable from a missing one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_present: Option<bool>,
 }
 
 impl Snapshot {
@@ -50,7 +55,14 @@ impl Snapshot {
             command: command.to_string(),
             ts: next_timestamp(),
             ty,
+            before_present: None,
         }
+    }
+
+    /// Whether the value existed before the mutation. Old snapshots omit the
+    /// flag, so fall back to today's convention: an empty `before` meant absent.
+    pub fn before_exists(&self) -> bool {
+        self.before_present.unwrap_or(!self.before.is_empty())
     }
 }
 
@@ -246,6 +258,25 @@ mod tests {
         prune_at(dir.path()).unwrap();
         assert!(fresh.exists(), "a save in flight must survive prune");
         assert!(!stale.exists(), "crash leftovers are cleaned up");
+    }
+
+    #[test]
+    fn before_exists_defaults_to_nonempty_and_honours_the_flag() {
+        let old = Snapshot::new("user", "V", "", "x", "set");
+        assert!(
+            !old.before_exists(),
+            "old snapshot: empty before means absent"
+        );
+        let present_empty = Snapshot {
+            before_present: Some(true),
+            ..old.clone()
+        };
+        assert!(present_empty.before_exists());
+        let absent = Snapshot {
+            before_present: Some(false),
+            ..old
+        };
+        assert!(!absent.before_exists());
     }
 
     #[test]

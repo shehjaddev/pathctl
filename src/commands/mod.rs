@@ -99,10 +99,10 @@ pub fn backup_scopes(scope: Option<&str>) -> Result<Vec<Scope>> {
     }
 }
 
-fn current_path(reg: &Registry, scope: Scope) -> Result<(String, RegType)> {
+fn current_path(reg: &Registry, scope: Scope) -> Result<(String, RegType, bool)> {
     Ok(match reg.read_path(scope)? {
-        Some(v) => (v.raw, v.ty),
-        None => (String::new(), registry::default_path_type()),
+        Some(v) => (v.raw, v.ty, true),
+        None => (String::new(), registry::default_path_type(), false),
     })
 }
 
@@ -193,14 +193,13 @@ struct ChangesOut<'a> {
 }
 
 /// The entry list a result reports: PATH entries, or the single value of a
-/// variable. Empty means "not set".
-fn entries_of(name: &str, value: &str) -> Vec<String> {
-    if name == registry::PATH_VALUE {
-        pathops::parse(value)
-    } else if value.is_empty() {
-        Vec::new()
-    } else {
-        vec![value.to_string()]
+/// variable. `None` means the value is not set; `Some("")` is a present empty
+/// value and reports as one empty entry rather than "not set".
+fn entries_of(name: &str, value: Option<&str>) -> Vec<String> {
+    match value {
+        None => Vec::new(),
+        Some(v) if name == registry::PATH_VALUE => pathops::parse(v),
+        Some(v) => vec![v.to_string()],
     }
 }
 
@@ -215,14 +214,16 @@ struct MutationOut<'a> {
 }
 
 /// Report one applied mutation: a JSON document under `--json`, the human
-/// `summary` line otherwise.
+/// `summary` line otherwise. `before`/`after` are `None` when the value did not
+/// exist on that side of the change.
+#[allow(clippy::too_many_arguments)]
 fn report_mutation(
     g: &Global,
     scope: Scope,
     name: &str,
     action: &str,
-    before: &str,
-    after: &str,
+    before: Option<&str>,
+    after: Option<&str>,
     summary: &str,
 ) {
     if !g.json {
@@ -378,24 +379,29 @@ impl Committed {
 }
 
 /// Journal a mutation and trim the store. Returns the snapshot path so a write
-/// that never happened can drop the record again.
+/// that never happened can drop the record again. `before_present` records
+/// whether the value existed, so undo can tell an empty value from a missing
+/// one.
 fn journal(
     scope: Scope,
     name: &str,
-    before: &str,
-    after: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+    before_present: bool,
     command: &str,
     ty: Option<RegType>,
 ) -> Result<std::path::PathBuf> {
-    let path = snapshot::save(&Snapshot::with_ty(
+    let mut snap = Snapshot::with_ty(
         scope.label(),
         name,
-        before,
-        after,
+        before.unwrap_or_default(),
+        after.unwrap_or_default(),
         command,
         ty.map(registry::reg_type_to_u32),
-    ))
-    .map_err(|e| AppError::Other(format!("snapshot failed: {e}")))?;
+    );
+    snap.before_present = Some(before_present);
+    let path = snapshot::save(&snap)
+        .map_err(|e| AppError::Other(format!("snapshot failed: {e}")))?;
     if let Err(e) = snapshot::prune() {
         eprintln!("warning: snapshot prune failed: {e}");
     }
@@ -422,7 +428,9 @@ fn commit(
     let after_raw = after.map(|(v, _)| v).unwrap_or_default();
     let before_ty = before.map(|(_, t)| t);
     let after_ty = after.map(|(_, t)| t);
-    if before_raw == after_raw && before_ty == after_ty {
+    let before_present = before.is_some();
+    let after_present = after.is_some();
+    if before_raw == after_raw && before_present == after_present && before_ty == after_ty {
         return Err(AppError::NoOp(if name == registry::PATH_VALUE {
             "PATH unchanged".into()
         } else {
@@ -442,8 +450,9 @@ fn commit(
     let snap_path = journal(
         scope,
         name,
-        before_raw,
-        after_raw,
+        before.map(|(v, _)| v),
+        after.map(|(v, _)| v),
+        before_present,
         command,
         before_ty.or(after_ty).cloned(),
     )?;

@@ -190,13 +190,15 @@ pub fn export(reg: &Registry, scopes: &[Scope], output: Option<&std::path::Path>
     Ok(0)
 }
 
-/// Current state plus target type for an imported PATH value.
+/// Current state plus target type for an imported PATH value. The bool says
+/// whether the value existed: a backup of an absent PATH must restore absence,
+/// not an empty value.
 fn path_import_state(
     reg: &Registry,
     scope: Scope,
     value: &BackupValue,
-) -> Result<(String, RegType, RegType)> {
-    let (before_raw, before_ty) = current_path(reg, scope)?;
+) -> Result<(String, RegType, bool, RegType)> {
+    let (before_raw, before_ty, existed) = current_path(reg, scope)?;
     guard_text_type(registry::PATH_VALUE, &before_ty)?;
     let write_ty = match value.ty {
         Some(code) => registry::reg_type_from_u32(code).ok_or_else(|| {
@@ -214,7 +216,7 @@ fn path_import_state(
             ty_name(&write_ty)
         )));
     }
-    Ok((before_raw, before_ty, write_ty))
+    Ok((before_raw, before_ty, existed, write_ty))
 }
 
 /// One imported PATH value as it appears in the JSON report, including the
@@ -237,7 +239,7 @@ fn import_path_doc(
 }
 
 /// One imported variable as it appears in the JSON report.
-fn import_var_doc(name: &str, before: &str, after: &str) -> serde_json::Value {
+fn import_var_doc(name: &str, before: Option<&str>, after: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "scope": "user",
         "name": name,
@@ -246,20 +248,19 @@ fn import_var_doc(name: &str, before: &str, after: &str) -> serde_json::Value {
     })
 }
 
-/// Would importing `var` change anything? Mirrors `env set` conventions:
-/// an unset variable with an empty value is a no-op.
+/// Would importing `var` change anything? Any unset variable changes: even an
+/// empty value creates the variable. A set one changes when the value or the
+/// declared type differs.
 fn var_import_changes(current: Option<&PathValue>, var: &BackupVar) -> bool {
-    let before_raw = current.map(|v| v.raw.as_str()).unwrap_or("");
-    if before_raw != var.value.as_str() {
+    let Some(v) = current else {
+        return true;
+    };
+    if v.raw != var.value {
         return true;
     }
-    match current {
-        None => false,
-        Some(v) => var
-            .ty
-            .and_then(registry::reg_type_from_u32)
-            .is_some_and(|t| t != v.ty),
-    }
+    var.ty
+        .and_then(registry::reg_type_from_u32)
+        .is_some_and(|t| t != v.ty)
 }
 
 /// Target type for an imported variable (file type, else keep, else default).
@@ -315,6 +316,8 @@ enum Planned {
         scope: Scope,
         before: String,
         before_ty: RegType,
+        /// Whether the value existed: restores absence, not an empty value.
+        before_exists: bool,
         after: String,
         after_ty: RegType,
     },
@@ -341,13 +344,14 @@ impl Planned {
                 before_ty,
                 after,
                 after_ty,
+                ..
             } => import_path_doc(*scope, before, after, before_ty, after_ty),
             Planned::Var {
                 name,
                 before,
                 after,
                 ..
-            } => import_var_doc(name, before_raw(before), after),
+            } => import_var_doc(name, before.as_ref().map(|v| v.raw.as_str()), Some(after)),
         }
     }
 
@@ -360,6 +364,7 @@ impl Planned {
                 before_ty,
                 after,
                 after_ty,
+                ..
             } => {
                 if before == after {
                     println!(
@@ -399,6 +404,7 @@ impl Planned {
                 scope,
                 before,
                 before_ty,
+                before_exists,
                 after,
                 after_ty,
             } => commit(
@@ -406,8 +412,8 @@ impl Planned {
                 g,
                 *scope,
                 registry::PATH_VALUE,
-                Some((before, before_ty)),
-                Some((after, after_ty)),
+                before_exists.then_some((before.as_str(), before_ty)),
+                Some((after.as_str(), after_ty)),
                 "import",
             ),
             Planned::Var {
@@ -442,12 +448,13 @@ fn plan_changes(reg: &Registry, scopes: &[Scope], data: &BackupFile) -> Result<V
         if !scopes.contains(&scope) {
             continue;
         }
-        let (before, before_ty, after_ty) = path_import_state(reg, scope, value)?;
-        if before != value.value || before_ty != after_ty {
+        let (before, before_ty, existed, after_ty) = path_import_state(reg, scope, value)?;
+        if !existed || before != value.value || before_ty != after_ty {
             planned.push(Planned::Path {
                 scope,
                 before,
                 before_ty,
+                before_exists: existed,
                 after: value.value.clone(),
                 after_ty,
             });

@@ -47,17 +47,19 @@ pub fn env_set(reg: &Registry, g: &Global, scope: Scope, name: &str, value: &str
     valid_var_name(name)?;
     reserve_path_name(name)?;
     let current = reg.read_var(scope, name)?;
-    let before_raw = current.as_ref().map(|v| v.raw.as_str()).unwrap_or_default();
+    let before = current.as_ref().map(|v| v.raw.as_str());
     // A dry run is a preview: report and exit 0 even when nothing would change.
     if g.dry_run {
         print_changes(
             g.json,
-            &entries_of(name, before_raw),
-            &entries_of(name, value),
+            &entries_of(name, before),
+            &entries_of(name, Some(value)),
         );
         return Ok(0);
     }
-    if before_raw == value {
+    // Only a value that is already present and equal is a no-op; an unset name
+    // with an empty value still creates an (empty) variable.
+    if current.as_ref().is_some_and(|v| v.raw == value) {
         return Err(AppError::NoOp(format!(
             "{name} is already set to that value"
         )));
@@ -67,16 +69,18 @@ pub fn env_set(reg: &Registry, g: &Global, scope: Scope, name: &str, value: &str
         .as_ref()
         .map(|v| v.ty.clone())
         .unwrap_or_else(registry::default_var_type);
-    let before = current.as_ref().map(|v| (v.raw.as_str(), &v.ty));
+    let before_pair = current.as_ref().map(|v| (v.raw.as_str(), &v.ty));
     if let Some(code) = commit(
         reg,
         g,
         scope,
         name,
-        before,
+        before_pair,
         Some((value, &ty)),
         &format!("set {name}"),
-    )?.delegated_code() {
+    )?
+    .delegated_code()
+    {
         return Ok(code);
     }
     report_mutation(
@@ -84,8 +88,8 @@ pub fn env_set(reg: &Registry, g: &Global, scope: Scope, name: &str, value: &str
         scope,
         name,
         "set",
-        before_raw,
-        value,
+        before,
+        Some(value),
         &format!("set: {name}"),
     );
     Ok(0)
@@ -95,18 +99,18 @@ pub fn env_delete(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Resul
     valid_var_name(name)?;
     reserve_path_name(name)?;
     let current = reg.read_var(scope, name)?;
-    let before_raw = current.as_ref().map(|v| v.raw.as_str()).unwrap_or_default();
+    let before = current.as_ref().map(|v| v.raw.as_str());
     if g.dry_run {
-        print_changes(g.json, &entries_of(name, before_raw), &[]);
+        print_changes(g.json, &entries_of(name, before), &[]);
         return Ok(0);
     }
     let Some(current) = current else {
         return Err(AppError::NoOp(format!("{name} is not set")));
     };
     confirm(g, &format!("delete {name}"))?;
-    let before = Some((current.raw.as_str(), &current.ty));
+    let before_pair = Some((current.raw.as_str(), &current.ty));
     if let Some(code) =
-        commit(reg, g, scope, name, before, None, &format!("delete {name}"))?.delegated_code()
+        commit(reg, g, scope, name, before_pair, None, &format!("delete {name}"))?.delegated_code()
     {
         return Ok(code);
     }
@@ -115,8 +119,8 @@ pub fn env_delete(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Resul
         scope,
         name,
         "delete",
-        &current.raw,
-        "",
+        Some(current.raw.as_str()),
+        None,
         &format!("deleted: {name}"),
     );
     Ok(0)

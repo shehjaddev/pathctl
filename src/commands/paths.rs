@@ -22,7 +22,7 @@ pub fn add(
             "a PATH entry cannot contain ';': '{entry}'"
         )));
     }
-    let (before_raw, before_ty) = current_path(reg, scope)?;
+    let (before_raw, before_ty, existed) = current_path(reg, scope)?;
     let mut entries = pathops::parse(&before_raw);
     let already_present = dedupe && pathops::contains(&entries, &entry);
     // With --dedupe an entry already present is left out, so the preview shows
@@ -51,7 +51,7 @@ pub fn add(
         g,
         scope,
         registry::PATH_VALUE,
-        Some((&before_raw, &before_ty)),
+        existed.then_some((before_raw.as_str(), &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("add {entry}"),
     )?.delegated_code() {
@@ -62,8 +62,8 @@ pub fn add(
         scope,
         registry::PATH_VALUE,
         "add",
-        &before_raw,
-        &after_raw,
+        Some(before_raw.as_str()),
+        Some(after_raw.as_str()),
         &format!("added: {entry}"),
     );
     Ok(0)
@@ -86,7 +86,7 @@ fn parse_target(target: &str) -> Target<'_> {
 }
 
 pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<u8> {
-    let (before_raw, before_ty) = current_path(reg, scope)?;
+    let (before_raw, before_ty, existed) = current_path(reg, scope)?;
     let mut entries = pathops::parse(&before_raw);
     let removed = match parse_target(target) {
         Target::Index(index) => Some(remove_at(&mut entries, index)?),
@@ -111,7 +111,7 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
         g,
         scope,
         registry::PATH_VALUE,
-        Some((&before_raw, &before_ty)),
+        existed.then_some((before_raw.as_str(), &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("remove {removed}"),
     )?.delegated_code() {
@@ -122,8 +122,8 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
         scope,
         registry::PATH_VALUE,
         "remove",
-        &before_raw,
-        &after_raw,
+        Some(before_raw.as_str()),
+        Some(after_raw.as_str()),
         &format!("removed: {removed}"),
     );
     Ok(0)
@@ -135,7 +135,7 @@ fn remove_at(entries: &mut Vec<String>, index: usize) -> Result<String> {
 }
 
 pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
-    let (before_raw, before_ty) = current_path(reg, scope)?;
+    let (before_raw, before_ty, existed) = current_path(reg, scope)?;
     let before = pathops::parse(&before_raw);
     let after = pathops::dedupe(&before);
     let after_raw = after.join(";");
@@ -152,7 +152,7 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         g,
         scope,
         registry::PATH_VALUE,
-        Some((&before_raw, &before_ty)),
+        existed.then_some((before_raw.as_str(), &before_ty)),
         Some((&after_raw, &before_ty)),
         "dedupe",
     )?.delegated_code() {
@@ -163,8 +163,8 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         scope,
         registry::PATH_VALUE,
         "dedupe",
-        &before_raw,
-        &after_raw,
+        Some(before_raw.as_str()),
+        Some(after_raw.as_str()),
         &format!(
             "deduped: removed {} duplicate(s)",
             before.len() - after.len()
@@ -176,7 +176,7 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
 /// Remove PATH entries whose directories no longer exist. `%VAR%` references
 /// that cannot be resolved are kept: existence cannot be determined for them.
 pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
-    let (before_raw, before_ty) = current_path(reg, scope)?;
+    let (before_raw, before_ty, existed) = current_path(reg, scope)?;
     let before = pathops::parse(&before_raw);
     let env = reg.environment()?;
     let mut kept: Vec<String> = Vec::with_capacity(before.len());
@@ -204,7 +204,7 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         g,
         scope,
         registry::PATH_VALUE,
-        Some((&before_raw, &before_ty)),
+        existed.then_some((before_raw.as_str(), &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("prune {}", removed.len()),
     )?.delegated_code() {
@@ -220,15 +220,15 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         scope,
         registry::PATH_VALUE,
         "prune",
-        &before_raw,
-        &after_raw,
+        Some(before_raw.as_str()),
+        Some(after_raw.as_str()),
         &summary,
     );
     Ok(0)
 }
 
 pub fn move_entry(reg: &Registry, g: &Global, scope: Scope, from: usize, to: usize) -> Result<u8> {
-    let (before_raw, before_ty) = current_path(reg, scope)?;
+    let (before_raw, before_ty, existed) = current_path(reg, scope)?;
     let mut entries = pathops::parse(&before_raw);
     pathops::reorder(&mut entries, from, to).map_err(|e| AppError::Usage(e.to_string()))?;
     let after_raw = entries.join(";");
@@ -245,7 +245,7 @@ pub fn move_entry(reg: &Registry, g: &Global, scope: Scope, from: usize, to: usi
         g,
         scope,
         registry::PATH_VALUE,
-        Some((&before_raw, &before_ty)),
+        existed.then_some((before_raw.as_str(), &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("move {from} {to}"),
     )?.delegated_code() {
@@ -256,8 +256,8 @@ pub fn move_entry(reg: &Registry, g: &Global, scope: Scope, from: usize, to: usi
         scope,
         registry::PATH_VALUE,
         "move",
-        &before_raw,
-        &after_raw,
+        Some(before_raw.as_str()),
+        Some(after_raw.as_str()),
         &format!("moved: {from} -> {to}"),
     );
     Ok(0)
