@@ -138,6 +138,23 @@ fn check_flags_missing_directory_exit_1() {
         .stdout(predicate::str::contains("missing directory"));
 }
 
+#[test]
+fn bare_drive_letter_is_not_the_drive_root() {
+    let dir = setup("bare_drive");
+    pathctl("bare_drive", dir.path())
+        .args(["add", r"C:\"])
+        .assert()
+        .success();
+    // `C:` means the current directory on C:, not the drive root `C:\`, so it
+    // must not be treated as a duplicate of `C:\`.
+    pathctl("bare_drive", dir.path())
+        .args(["add", r"C:"])
+        .assert()
+        .success();
+    // Two distinct entries, so dedupe has nothing to remove.
+    pathctl("bare_drive", dir.path()).arg("dedupe").assert().code(4);
+}
+
 // ---------------------------------------------------------------------------
 // add / remove / dedupe / move
 // ---------------------------------------------------------------------------

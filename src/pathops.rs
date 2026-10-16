@@ -36,7 +36,8 @@ pub fn trim_quotes(s: &str) -> &str {
 
 /// Canonical comparison form: quotes trimmed, `/` normalized to `\`,
 /// trailing backslashes stripped, except at drive roots where the root
-/// backslash is mandatory (`C:\`).
+/// backslash is kept (`C:\`). Bare `C:` is *not* a drive root: it means the
+/// current directory on that drive, so it must not equal `C:\`.
 pub fn canon(s: &str) -> String {
     let t = trim_quotes(s);
     let t = if t.contains('/') {
@@ -44,15 +45,18 @@ pub fn canon(s: &str) -> String {
     } else {
         Cow::Borrowed(t)
     };
+    // Only restore the root slash when the entry wrote one; stripping `C:\`
+    // and `C:` to the same value would make two different paths compare equal.
+    let had_trailing = t.ends_with('\\');
     let t = t.trim_end_matches('\\');
-    if is_drive_root(t) {
+    if had_trailing && is_drive_root(t) {
         format!("{t}\\")
     } else {
         t.to_string()
     }
 }
 
-/// True for `C:` (the stripped form of drive root `C:\`).
+/// True for the stripped form of a drive root (`C:` from `C:\`).
 fn is_drive_root(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
@@ -200,8 +204,20 @@ mod tests {
     fn canon_strips_trailing_backslash_but_keeps_drive_root() {
         assert_eq!(canon(r"C:\tools\"), r"C:\tools");
         assert_eq!(canon(r"C:\"), r"C:\");
-        assert_eq!(canon(r"C:"), r"C:\");
+        // Bare `C:` is the current directory on C:, not the drive root.
+        assert_eq!(canon(r"C:"), r"C:");
+        assert_eq!(canon(r"C:/"), r"C:\");
         assert_eq!(canon(r"\\server\share\"), r"\\server\share");
+    }
+
+    #[test]
+    fn bare_drive_does_not_match_drive_root() {
+        assert!(!eq(r"C:", r"C:\"));
+        assert!(!eq(r"c:", r"C:\"));
+        assert!(eq(r"C:", r"c:"));
+        assert!(eq(r"C:\", r"c:\"));
+        // Equality still ignores a trailing slash on a non-root path.
+        assert!(eq(r"C:\tools", r"C:\tools\"));
     }
 
     #[test]
