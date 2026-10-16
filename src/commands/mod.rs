@@ -26,6 +26,10 @@ pub enum AppError {
     ElevationRequired(String),
     #[error("{0}")]
     NoOp(String),
+    /// A no-op that must not print anything at all: `env get` of an unset
+    /// variable reports "not set" through its exit code alone.
+    #[error("{0}")]
+    QuietNoOp(String),
     #[error("registry error: {0}")]
     Registry(#[from] io::Error),
     #[error("{0}")]
@@ -38,7 +42,7 @@ impl AppError {
     pub fn exit_code(&self) -> u8 {
         match self {
             AppError::ElevationRequired(_) => 3,
-            AppError::NoOp(_) => 4,
+            AppError::NoOp(_) | AppError::QuietNoOp(_) => 4,
             AppError::Registry(_) => 5,
             AppError::Usage(_) => 2,
             AppError::Other(_) => 6,

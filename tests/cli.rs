@@ -953,6 +953,18 @@ fn env_set_get_delete_roundtrip() {
 }
 
 #[test]
+fn env_get_unset_is_silent_exit_4() {
+    let dir = setup("env_get_unset");
+    // The documented contract: exit 4 with empty stdout *and* empty stderr.
+    pathctl("env_get_unset", dir.path())
+        .args(["env", "get", "PATHCTL_NEVER_SET"])
+        .assert()
+        .code(4)
+        .stdout("")
+        .stderr("");
+}
+
+#[test]
 fn env_set_is_undoable() {
     let dir = setup("env_undo");
     let name = "PATHCTL_TEST_VAR2";

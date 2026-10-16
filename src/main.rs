@@ -134,7 +134,11 @@ fn main() -> ExitCode {
     match run(cli, g, &reg) {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
-            eprintln!("error: {e}");
+            // `env get` on an unset variable is the one no-op that must be
+            // silent: its exit code is the whole answer.
+            if !matches!(e, commands::AppError::QuietNoOp(_)) {
+                eprintln!("error: {e}");
+            }
             ExitCode::from(e.exit_code())
         }
     }

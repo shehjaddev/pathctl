@@ -17,7 +17,7 @@ pub fn env_get(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Result<u
             }
             Ok(0)
         }
-        None => Err(AppError::NoOp(format!("{name} is not set"))),
+        None => Err(AppError::QuietNoOp(format!("{name} is not set"))),
     }
 }
 
