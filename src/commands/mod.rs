@@ -110,7 +110,7 @@ fn current_path(reg: &Registry, scope: Scope) -> Result<(String, RegType)> {
 struct EntryAnalysis {
     /// A `%VAR%` reference that did not resolve, so existence is unknown.
     unresolvable: bool,
-    /// The target is not an existing directory.
+    /// The absolute target does not exist (metadata says `NotFound`).
     missing: bool,
     /// Expansion replaced at least one `%VAR%` reference.
     expanded: bool,
@@ -119,11 +119,24 @@ struct EntryAnalysis {
 fn analyze_entry(entry: &str) -> EntryAnalysis {
     let unquoted = pathops::trim_quotes(entry);
     let target = util::expand(unquoted);
+    let unresolvable = util::has_var_ref(unquoted) && target == unquoted;
     EntryAnalysis {
-        unresolvable: util::has_var_ref(unquoted) && target == unquoted,
-        missing: !std::path::Path::new(&target).is_dir(),
+        unresolvable,
+        missing: !unresolvable && is_missing(&target),
         expanded: target != unquoted,
     }
+}
+
+/// A PATH entry is missing only when it is absolute and its metadata fails with
+/// `NotFound`. A relative entry, a file, an offline share or a permission error
+/// all keep it: existence is either unknown or not required (PATH entries need
+/// not be directories), and pruning on that basis would delete a live path.
+fn is_missing(target: &str) -> bool {
+    let p = std::path::Path::new(target);
+    if !p.is_absolute() {
+        return false;
+    }
+    matches!(std::fs::metadata(p), Err(e) if e.kind() == io::ErrorKind::NotFound)
 }
 
 /// Display name for a registry value type (`REG_SZ`, `REG_BINARY`, ...).

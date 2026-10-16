@@ -503,6 +503,40 @@ fn prune_dry_run_writes_nothing() {
 }
 
 #[test]
+fn prune_keeps_files_and_relative_entries() {
+    let dir = setup("prune_files");
+    let file = dir.path().join("a-file");
+    std::fs::write(&file, "x").unwrap();
+    let file_s = file.to_string_lossy().into_owned();
+    pathctl("prune_files", dir.path())
+        .arg("add")
+        .arg(&file_s)
+        .assert()
+        .success();
+    pathctl("prune_files", dir.path())
+        .args(["add", "pathctl-relative-dir"])
+        .assert()
+        .success();
+    // A regular file and a relative entry both exist or cannot be judged; only
+    // an absolute path whose metadata says NotFound is missing.
+    pathctl("prune_files", dir.path())
+        .arg("check")
+        .assert()
+        .success();
+    pathctl("prune_files", dir.path()).arg("prune").assert().code(4);
+    let out = pathctl("prune_files", dir.path())
+        .args(["list", "--raw"])
+        .output()
+        .unwrap();
+    let text = stdout(&out);
+    assert!(text.contains(&file_s), "a file entry must be kept");
+    assert!(
+        text.contains("pathctl-relative-dir"),
+        "a relative entry must be kept"
+    );
+}
+
+#[test]
 fn prune_keeps_quoted_entries_for_existing_directories() {
     let dir = setup("prune_quoted");
     let existing = std::env::current_dir()
@@ -1596,11 +1630,13 @@ fn list_raw_validates_resolved_entries() {
         .args(["add", "%PATHCTL_DEFINITELY_UNRESOLVABLE_XYZ%"])
         .assert()
         .success();
+    // Unresolvable, so existence is unknown: exactly one flag, never missing too.
     pathctl("list_raw_vars", dir.path())
         .args(["list", "--raw"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("[%!]"));
+        .stdout(predicate::str::contains("[%]"))
+        .stdout(predicate::str::contains("[%!]").not());
 }
 
 /// Command for the opt-in smoke tests: an isolated snapshot dir, confirmation
