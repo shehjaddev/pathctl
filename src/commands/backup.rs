@@ -432,6 +432,43 @@ impl Planned {
             ),
         }
     }
+
+    /// Validate this change without touching the registry, so a whole plan can
+    /// be checked before the first write. Only the length guard can still fail
+    /// here: types were validated while planning.
+    fn preflight(&self) -> Result<()> {
+        let (name, after) = match self {
+            Planned::Path { after, .. } => (registry::PATH_VALUE, after.as_str()),
+            Planned::Var { name, after, .. } => (name.as_str(), after.as_str()),
+        };
+        guard_length(name, after)
+    }
+
+    /// Put the value back the way `before` recorded it. Used to undo the changes
+    /// an import already applied when a later one fails. Writes the registry
+    /// directly (no snapshot): the failed import never reported success, so its
+    /// partial work must leave no journal entry behind.
+    fn rollback(&self, reg: &Registry) -> io::Result<()> {
+        match self {
+            Planned::Path {
+                scope,
+                before,
+                before_ty,
+                before_exists,
+                ..
+            } => {
+                if *before_exists {
+                    reg.write_path(*scope, before, before_ty.clone())
+                } else {
+                    reg.delete_var(*scope, registry::PATH_VALUE)
+                }
+            }
+            Planned::Var { name, before, .. } => match before {
+                Some(v) => reg.write_var(Scope::User, name, &v.raw, v.ty.clone()),
+                None => reg.delete_var(Scope::User, name),
+            },
+        }
+    }
 }
 
 /// Resolve a backup file into the changes it would make, validating every entry
@@ -520,16 +557,54 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
         return Ok(0);
     }
 
-    let mut applied = 0usize;
+    // Preflight the whole plan so a failure leaves nothing written: the length
+    // guard is checked for every change before the first write.
     for change in &planned {
-        if let Some(code) = change.apply(reg, g)?.delegated_code() {
+        change.preflight()?;
+    }
+
+    // Elevate the *whole* import up front rather than per item: a system write
+    // reached halfway through used to relaunch for that one value, leaving the
+    // user changes already applied. Decide once, before any write.
+    let needs_system = planned
+        .iter()
+        .any(|c| matches!(c, Planned::Path { scope: Scope::System, .. }));
+    if needs_system && !reg.can_write(Scope::System) {
+        if g.elevate {
+            let code = crate::elevate::relaunch_elevated()
+                .map_err(|e| AppError::Other(format!("elevation failed: {e}")))?;
             return Ok(code);
         }
-        applied += 1;
-        if g.json {
-            docs.push(change.doc());
+        return Err(AppError::ElevationRequired(
+            "importing the system PATH requires elevation; rerun with --elevate (UAC) or from an elevated shell".into(),
+        ));
+    }
+
+    // Apply, remembering what succeeded so a later failure can be rolled back
+    // instead of leaving a half-imported environment behind.
+    let mut applied: Vec<&Planned> = Vec::new();
+    for change in &planned {
+        match change.apply(reg, g) {
+            Ok(Committed::Written) => {
+                applied.push(change);
+                if g.json {
+                    docs.push(change.doc());
+                }
+            }
+            // Elevation is settled above; a delegation here means a per-item
+            // fallback fired anyway. Roll back and forward its code rather than
+            // claim success for work this process did not do.
+            Ok(Committed::Delegated(code)) => {
+                roll_back(reg, &applied);
+                return Ok(code);
+            }
+            Err(e) => {
+                roll_back(reg, &applied);
+                return Err(e);
+            }
         }
     }
+    let applied = applied.len();
     if g.json {
         println!(
             "{}",
@@ -546,9 +621,75 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
     Ok(0)
 }
 
+/// Undo the changes an import already applied, newest first. Failures are
+/// reported but do not mask the original error: the caller is already failing.
+fn roll_back(reg: &Registry, applied: &[&Planned]) {
+    for change in applied.iter().rev() {
+        if let Err(e) = change.rollback(reg) {
+            eprintln!("warning: import rollback failed: {e}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rollback_restores_previous_registry_state() {
+        let key = registry::TestKeyGuard::new("import-rollback");
+        let reg = key.registry();
+
+        // A change over an existing value: rollback puts the old value back.
+        reg.write_var(
+            Scope::User,
+            "PATHCTL_ROLL_KEEP",
+            "original",
+            registry::default_var_type(),
+        )
+        .unwrap();
+        let overwrite = Planned::Var {
+            name: "PATHCTL_ROLL_KEEP".into(),
+            before: Some(registry::PathValue {
+                raw: "original".into(),
+                ty: registry::default_var_type(),
+            }),
+            after: "changed".into(),
+            ty: registry::default_var_type(),
+        };
+        reg.write_var(
+            Scope::User,
+            "PATHCTL_ROLL_KEEP",
+            "changed",
+            registry::default_var_type(),
+        )
+        .unwrap();
+        overwrite.rollback(&reg).unwrap();
+        assert_eq!(
+            reg.read_var(Scope::User, "PATHCTL_ROLL_KEEP")
+                .unwrap()
+                .unwrap()
+                .raw,
+            "original"
+        );
+
+        // A change over an absent value: rollback deletes it again.
+        let create = Planned::Var {
+            name: "PATHCTL_ROLL_NEW".into(),
+            before: None,
+            after: "x".into(),
+            ty: registry::default_var_type(),
+        };
+        reg.write_var(
+            Scope::User,
+            "PATHCTL_ROLL_NEW",
+            "x",
+            registry::default_var_type(),
+        )
+        .unwrap();
+        create.rollback(&reg).unwrap();
+        assert!(reg.read_var(Scope::User, "PATHCTL_ROLL_NEW").unwrap().is_none());
+    }
 
     #[test]
     fn export_refuses_non_windows_output_path() {

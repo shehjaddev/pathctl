@@ -204,6 +204,14 @@ impl Registry {
         }
     }
 
+    /// Best-effort probe for whether this process can write to `scope`. Used to
+    /// decide up front whether a bulk `import` needs elevation, before any value
+    /// is written, rather than discovering it halfway through. A `false` here is
+    /// the same signal the actual write would give (a `PermissionDenied`).
+    pub fn can_write(&self, scope: Scope) -> bool {
+        self.open_with(scope, KEY_READ | KEY_WRITE).is_ok()
+    }
+
     /// All values under a scope key (export). A missing key yields an empty
     /// list (read-only; nothing is created).
     pub fn enum_all(&self, scope: Scope) -> io::Result<Vec<(String, PathValue)>> {
@@ -430,6 +438,15 @@ mod tests {
         assert_eq!(env.get("PATHCTL_ENV_SYS").as_deref(), Some("s"));
         // PATH is composed system-then-user as a new process inherits it.
         assert_eq!(env.get("Path").as_deref(), Some(r"C:\sys;C:\usr"));
+    }
+
+    #[test]
+    fn can_write_is_true_for_writable_scope() {
+        // Test scopes live under HKCU, which this process may always write.
+        let key = TestKeyGuard::new("can-write");
+        let reg = key.registry();
+        assert!(reg.can_write(Scope::User));
+        assert!(reg.can_write(Scope::System));
     }
 
     #[test]

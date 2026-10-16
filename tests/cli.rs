@@ -1060,6 +1060,37 @@ fn guard_refuses_oversized_value_on_import() {
         .code(4);
 }
 
+#[test]
+fn import_preflight_leaves_nothing_written_on_a_late_failure() {
+    let dir = setup("import_preflight");
+    // The first variable is valid; the second is over the length limit. The
+    // whole plan must be rejected before the valid one is written.
+    let big = "x".repeat(33_000);
+    let json = format!(
+        r#"{{"variables":{{"user":[
+            {{"name":"PATHCTL_GOOD_VAR","value":"ok","ty":1}},
+            {{"name":"PATHCTL_BIG_VAR","value":"{big}","ty":1}}
+        ]}}}}"#
+    );
+    let file = dir.path().join("mixed.json");
+    std::fs::write(&file, &json).unwrap();
+    pathctl("import_preflight", dir.path())
+        .arg("import")
+        .arg(&file)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("limit"));
+    // Neither variable may exist: preflight rejected the plan as a whole.
+    pathctl("import_preflight", dir.path())
+        .args(["env", "get", "PATHCTL_GOOD_VAR"])
+        .assert()
+        .code(4);
+    pathctl("import_preflight", dir.path())
+        .args(["env", "get", "PATHCTL_BIG_VAR"])
+        .assert()
+        .code(4);
+}
+
 // ---------------------------------------------------------------------------
 // scope / exit codes / json
 // ---------------------------------------------------------------------------
