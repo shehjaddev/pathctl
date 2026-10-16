@@ -143,9 +143,9 @@ pub fn undo(
     confirm(g, &format!("undo '{}' ({})", target.command, target.ts))?;
     guard_length(&restore.name, &restore.raw)?;
 
-    if apply_restore(reg, g, &restore)? == Committed::Delegated {
+    if let Some(code) = apply_restore(reg, g, &restore)?.delegated_code() {
         eprintln!("relaunched elevated; verify with list/env get (parent did not write)");
-        return Ok(0);
+        return Ok(code);
     }
 
     // Snapshot the inverse AFTER the write succeeds so a failed restore

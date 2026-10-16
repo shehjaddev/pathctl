@@ -515,8 +515,8 @@ pub fn import(reg: &Registry, g: &Global, scopes: &[Scope], file: &std::path::Pa
 
     let mut applied = 0usize;
     for change in &planned {
-        if change.apply(reg, g)? == Committed::Delegated {
-            return Ok(0);
+        if let Some(code) = change.apply(reg, g)?.delegated_code() {
+            return Ok(code);
         }
         applied += 1;
         if g.json {

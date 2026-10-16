@@ -46,7 +46,7 @@ pub fn add(
         return Err(AppError::NoOp(format!("{entry} is already in PATH")));
     }
     confirm(g, &format!("add '{entry}' to PATH"))?;
-    if commit(
+    if let Some(code) = commit(
         reg,
         g,
         scope,
@@ -54,9 +54,8 @@ pub fn add(
         Some((&before_raw, &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("add {entry}"),
-    )? == Committed::Delegated
-    {
-        return Ok(0);
+    )?.delegated_code() {
+        return Ok(code);
     }
     report_mutation(
         g,
@@ -107,7 +106,7 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
     }
     let removed = removed.ok_or_else(|| AppError::NoOp(format!("{target} is not in PATH")))?;
     confirm(g, &format!("remove '{removed}' from PATH"))?;
-    if commit(
+    if let Some(code) = commit(
         reg,
         g,
         scope,
@@ -115,9 +114,8 @@ pub fn remove(reg: &Registry, g: &Global, scope: Scope, target: &str) -> Result<
         Some((&before_raw, &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("remove {removed}"),
-    )? == Committed::Delegated
-    {
-        return Ok(0);
+    )?.delegated_code() {
+        return Ok(code);
     }
     report_mutation(
         g,
@@ -149,7 +147,7 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         return Err(AppError::NoOp("PATH already has no duplicates".into()));
     }
     confirm(g, "dedupe PATH")?;
-    if commit(
+    if let Some(code) = commit(
         reg,
         g,
         scope,
@@ -157,9 +155,8 @@ pub fn dedupe(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         Some((&before_raw, &before_ty)),
         Some((&after_raw, &before_ty)),
         "dedupe",
-    )? == Committed::Delegated
-    {
-        return Ok(0);
+    )?.delegated_code() {
+        return Ok(code);
     }
     report_mutation(
         g,
@@ -202,7 +199,7 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
     }
     let plural = if removed.len() == 1 { "y" } else { "ies" };
     confirm(g, &format!("prune {} missing entr{plural}", removed.len()))?;
-    if commit(
+    if let Some(code) = commit(
         reg,
         g,
         scope,
@@ -210,9 +207,8 @@ pub fn prune(reg: &Registry, g: &Global, scope: Scope) -> Result<u8> {
         Some((&before_raw, &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("prune {}", removed.len()),
-    )? == Committed::Delegated
-    {
-        return Ok(0);
+    )?.delegated_code() {
+        return Ok(code);
     }
     let mut summary = String::new();
     for e in &removed {
@@ -244,7 +240,7 @@ pub fn move_entry(reg: &Registry, g: &Global, scope: Scope, from: usize, to: usi
         return Err(AppError::NoOp("entry already at that position".into()));
     }
     confirm(g, &format!("move entry {from} to position {to}"))?;
-    if commit(
+    if let Some(code) = commit(
         reg,
         g,
         scope,
@@ -252,9 +248,8 @@ pub fn move_entry(reg: &Registry, g: &Global, scope: Scope, from: usize, to: usi
         Some((&before_raw, &before_ty)),
         Some((&after_raw, &before_ty)),
         &format!("move {from} {to}"),
-    )? == Committed::Delegated
-    {
-        return Ok(0);
+    )?.delegated_code() {
+        return Ok(code);
     }
     report_mutation(
         g,

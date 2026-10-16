@@ -68,7 +68,7 @@ pub fn env_set(reg: &Registry, g: &Global, scope: Scope, name: &str, value: &str
         .map(|v| v.ty.clone())
         .unwrap_or_else(registry::default_var_type);
     let before = current.as_ref().map(|v| (v.raw.as_str(), &v.ty));
-    if commit(
+    if let Some(code) = commit(
         reg,
         g,
         scope,
@@ -76,9 +76,8 @@ pub fn env_set(reg: &Registry, g: &Global, scope: Scope, name: &str, value: &str
         before,
         Some((value, &ty)),
         &format!("set {name}"),
-    )? == Committed::Delegated
-    {
-        return Ok(0);
+    )?.delegated_code() {
+        return Ok(code);
     }
     report_mutation(
         g,
@@ -106,9 +105,10 @@ pub fn env_delete(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Resul
     };
     confirm(g, &format!("delete {name}"))?;
     let before = Some((current.raw.as_str(), &current.ty));
-    if commit(reg, g, scope, name, before, None, &format!("delete {name}"))? == Committed::Delegated
+    if let Some(code) =
+        commit(reg, g, scope, name, before, None, &format!("delete {name}"))?.delegated_code()
     {
-        return Ok(0);
+        return Ok(code);
     }
     report_mutation(
         g,

@@ -294,9 +294,9 @@ fn write_error_to_app(
 ) -> Result<Committed> {
     if scope == Scope::System && e.kind() == io::ErrorKind::PermissionDenied {
         if g.elevate {
-            crate::elevate::relaunch_elevated()
+            let code = crate::elevate::relaunch_elevated()
                 .map_err(|e| AppError::Other(format!("elevation failed: {e}")))?;
-            Ok(Committed::Delegated)
+            Ok(Committed::Delegated(code))
         } else {
             Err(AppError::ElevationRequired(elevate_msg.into()))
         }
@@ -358,11 +358,23 @@ fn delete_var_elev(reg: &Registry, g: &Global, scope: Scope, name: &str) -> Resu
 }
 
 /// Whether a mutation was performed by this process or handed to an elevated
-/// child (in which case the parent must not claim the write happened).
+/// child (in which case the parent must not claim the write happened), plus the
+/// child's exit code to forward when the work was delegated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Committed {
     Written,
-    Delegated,
+    Delegated(u8),
+}
+
+impl Committed {
+    /// The exit code to return when this process delegated the write; `None`
+    /// when it wrote the value itself.
+    pub fn delegated_code(self) -> Option<u8> {
+        match self {
+            Committed::Written => None,
+            Committed::Delegated(code) => Some(code),
+        }
+    }
 }
 
 /// Journal a mutation and trim the store. Returns the snapshot path so a write
@@ -444,7 +456,7 @@ fn commit(
     };
     match write {
         Ok(Committed::Written) => {}
-        Ok(Committed::Delegated) => {
+        Ok(Committed::Delegated(code)) => {
             // Delegated to an elevated child: it journals itself, so drop our
             // premature snapshot rather than leave a phantom entry behind.
             let _ = std::fs::remove_file(&snap_path);
@@ -454,7 +466,7 @@ fn commit(
                 "env get"
             };
             eprintln!("relaunched elevated; verify with {verify} (parent did not write)");
-            return Ok(Committed::Delegated);
+            return Ok(Committed::Delegated(code));
         }
         Err(e) => {
             // The write failed (exit 3 without admin, or a registry error), so
